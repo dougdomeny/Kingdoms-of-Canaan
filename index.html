@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kingdoms of Canaan</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Kingdoms of Canaan</h1>
+      <p>Move your armies across Canaan. State is saved in your browser.</p>
+    </header>
+
+    <main>
+      <section class="toolbar" aria-label="Map controls">
+        <label for="zoom-range">Zoom</label>
+        <input id="zoom-range" type="range" min="0.5" max="2" step="0.1" value="1" />
+        <span id="zoom-value">100%</span>
+      </section>
+
+      <section id="map-viewport" aria-label="Scrollable game map">
+        <div id="map-canvas" role="application" aria-label="Game map with movable unit counters">
+          <div class="city" style="left: 280px; top: 220px">Jerusalem</div>
+          <div class="city" style="left: 980px; top: 480px">Damascus</div>
+          <div class="city" style="left: 1380px; top: 1020px">Babylon</div>
+        </div>
+      </section>
+    </main>
+
+    <script src="script.js"></script>
+  </body>
+</html>
