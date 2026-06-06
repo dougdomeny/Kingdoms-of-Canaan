@@ -17,12 +17,17 @@
         <label for="zoom-range">Zoom</label>
         <input id="zoom-range" type="range" min="0.5" max="2" step="0.1" value="1" />
         <span id="zoom-value">100%</span>
+        <label class="toggle-inline" for="show-space-names">
+          <input id="show-space-names" type="checkbox" />
+          Show space names
+        </label>
+        <span id="mouse-coords" aria-live="polite">Mouse: -, -</span>
+        <span id="space-count" aria-live="polite">Spaces: analyzing...</span>
       </section>
 
       <section id="map-viewport" aria-label="Scrollable game map">
         <div id="map-canvas" role="application" aria-label="Game map with movable unit counters">
-          <div class="city" style="left: 280px; top: 220px">Jerusalem</div>
-          <div class="city" style="left: 980px; top: 480px">Damascus</div>
+          <div id="spaces-layer" aria-hidden="true"></div>
           <div class="city" style="left: 1380px; top: 1020px">Babylon</div>
         </div>
       </section>

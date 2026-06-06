@@ -36,6 +36,26 @@ main {
   margin-bottom: 0.75rem;
 }
 
+.toggle-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+#space-count {
+  margin-left: auto;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+#mouse-coords {
+  min-width: 9.5rem;
+  font-size: 0.86rem;
+  font-family: Consolas, "Courier New", monospace;
+}
+
 #map-viewport {
   width: 100%;
   height: 75vh;
@@ -47,24 +67,35 @@ main {
 
 #map-canvas {
   position: relative;
-  width: 1600px;
-  height: 1200px;
-  background:
-    radial-gradient(circle at 25% 25%, #dbc59a 0, #c0aa7f 45%, #9f8a64 100%),
-    repeating-linear-gradient(
-      0deg,
-      rgba(0, 0, 0, 0.08) 0,
-      rgba(0, 0, 0, 0.08) 1px,
-      transparent 1px,
-      transparent 100px
-    ),
-    repeating-linear-gradient(
-      90deg,
-      rgba(0, 0, 0, 0.08) 0,
-      rgba(0, 0, 0, 0.08) 1px,
-      transparent 1px,
-      transparent 100px
-    );
+  width: 1035px;
+  height: 1590px;
+  overflow: hidden;
+  background-color: #d9c9a3;
+  background-image: url("Game Map.png");
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+}
+
+#spaces-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.space-marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 0.2rem 0.4rem;
+  border: 1px solid rgba(58, 29, 0, 0.75);
+  border-radius: 0.5rem;
+  background: rgba(255, 245, 210, 0.9);
+  color: #3f2b10;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-shadow: none;
+  max-width: 13rem;
+  text-align: center;
 }
 
 .city {
