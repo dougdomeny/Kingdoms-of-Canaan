@@ -15,6 +15,7 @@
   const zoomRange = document.getElementById('zoom-range');
   const zoomValue = document.getElementById('zoom-value');
   const spaceCount = document.getElementById('space-count');
+  const resetGameButton = document.getElementById('reset-game');
 
   const regionLabelAnchors = [
     { name: 'Dan', x: 664, y: 96 },
@@ -68,6 +69,53 @@
   ];
 
   const removedSpaceIndices = [5, 35];
+
+  const UNIT_IMAGE_FILES = [
+    'Ammon.png',
+    'Amorite.png',
+    'Aram-Syria Hazael.png',
+    'Aram-Syria.png',
+    'Assyria Sargon.png',
+    'Assyria.png',
+    'Assyrria Shalmaneser.png',
+    'Babylonia Nebuchadnezzar.png',
+    'Babylonia.png',
+    'Canaan.png',
+    'Edom.png',
+    'Egypt chariot.png',
+    'Egypt Necho.png',
+    'Egypt Shishak.png',
+    'Hebrew Asher.png',
+    'Hebrew Benjamin.png',
+    'Hebrew Dan.png',
+    'Hebrew David.png',
+    'Hebrew Ephraim.png',
+    'Hebrew Gad.png',
+    'Hebrew Issachar.png',
+    'Hebrew Joshua.png',
+    'Hebrew Judah.png',
+    'Hebrew Levi Ark.png',
+    'Hebrew Levi tabernacle.png',
+    'Hebrew Levi.png',
+    'Hebrew Manasseh.png',
+    'Hebrew Naphtali.png',
+    'Hebrew Priest.png',
+    'Hebrew Reuben.png',
+    'Hebrew Simeon.png',
+    'Hebrew tabernacle.png',
+    'Hebrew Zebulun.png',
+    'Hebrew.png',
+    'Hittite chariot.png',
+    'Hittite.png',
+    'Israel.png',
+    'Judah.png',
+    'Moab.png',
+    'Philistia chariot.png',
+    'Philistia.png',
+    'Phoenicia.png',
+    'Samaria.png',
+    'Temple of Solomon.png'
+  ];
 
   const configuredAdjacentSpacePairs = [
     [1, 2],
@@ -145,12 +193,27 @@
     zoom: 1,
     scrollLeft: 0,
     scrollTop: 0,
+    unitCounts: {
+      ammon: 2,
+      moab: 2,
+      edom: 2,
+      phoenicia: 3
+    },
     units: [
-      { id: 'israel', label: 'ISR', x: 420, y: 620, spaceId: '' },
-      { id: 'judah', label: 'JUD', x: 500, y: 720, spaceId: '' },
-      { id: 'hebrew', label: 'HEB', x: 1080, y: 340, spaceId: '' }
+      { id: 'ammon-1', unitTypeId: 'ammon', label: 'AMM', x: 954, y: 930, spaceId: '' },
+      { id: 'ammon-2', unitTypeId: 'ammon', label: 'AMM', x: 954, y: 930, spaceId: '' },
+      { id: 'moab-1', unitTypeId: 'moab', label: 'MOA', x: 775, y: 1265, spaceId: '' },
+      { id: 'moab-2', unitTypeId: 'moab', label: 'MOA', x: 775, y: 1265, spaceId: '' },
+      { id: 'edom-1', unitTypeId: 'edom', label: 'EDO', x: 760, y: 1480, spaceId: '' },
+      { id: 'edom-2', unitTypeId: 'edom', label: 'EDO', x: 760, y: 1480, spaceId: '' },
+      { id: 'phoenicia-1', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
+      { id: 'phoenicia-2', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
+      { id: 'phoenicia-3', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' }
     ]
   };
+
+  const unitTypes = UNIT_IMAGE_FILES.map((fileName) => parseUnitTypeFromFileName(fileName));
+  const unitTypeById = new Map(unitTypes.map((unitType) => [unitType.id, unitType]));
 
   const detectedSpaces = [];
   let spacesById = new Map();
@@ -176,19 +239,35 @@
         ? parsed.units
             .map((unit) => ({
               id: String(unit.id || ''),
-              label: String(unit.label || '').slice(0, 4).toUpperCase() || 'UNT',
+              unitTypeId: deriveUnitTypeId(unit),
+              label: deriveUnitLabel(deriveUnitTypeId(unit), unit.label),
               x: sanitizeNumber(unit.x, 0, BASE_WIDTH, BASE_WIDTH / 2),
               y: sanitizeNumber(unit.y, 0, BASE_HEIGHT, BASE_HEIGHT / 2),
               spaceId: typeof unit.spaceId === 'string' ? unit.spaceId : ''
             }))
             .filter((unit) => unit.id)
-        : structuredClone(defaultState.units);
+        : structuredClone(defaultState.units).map((unit) => ({
+            ...unit,
+            unitTypeId: deriveUnitTypeId(unit),
+            label: deriveUnitLabel(deriveUnitTypeId(unit), unit.label)
+          }));
+
+      const normalizedUnits = units.length
+        ? units
+        : structuredClone(defaultState.units).map((unit) => ({
+            ...unit,
+            unitTypeId: deriveUnitTypeId(unit),
+            label: deriveUnitLabel(deriveUnitTypeId(unit), unit.label)
+          }));
+
+      const unitCounts = normalizeUnitCounts(parsed.unitCounts, normalizedUnits);
 
       return {
         zoom,
         scrollLeft: sanitizeNumber(parsed.scrollLeft, 0, BASE_WIDTH * zoom, 0),
         scrollTop: sanitizeNumber(parsed.scrollTop, 0, BASE_HEIGHT * zoom, 0),
-        units: units.length ? units : structuredClone(defaultState.units)
+        unitCounts,
+        units: normalizedUnits
       };
     } catch {
       return structuredClone(defaultState);
@@ -201,6 +280,108 @@
       return fallback;
     }
     return Math.min(max, Math.max(min, number));
+  }
+
+  function parseUnitTypeFromFileName(fileName) {
+    const baseName = fileName.replace(/\.png$/i, '');
+    const parts = baseName.split(' ').filter(Boolean);
+    const nation = parts[0] || baseName;
+    const descriptor = parts.slice(1).join(' ');
+    const descriptorLower = descriptor.toLowerCase();
+    const isChariot = descriptorLower.endsWith('chariot');
+    const classification = isChariot
+      ? 'chariot'
+      : descriptor
+        ? 'leader'
+        : 'standard';
+
+    return {
+      id: toSlug(baseName),
+      fileName,
+      imagePath: `Units/${fileName}`,
+      displayName: baseName,
+      nation,
+      descriptor,
+      classification,
+      isChariot,
+      shortLabel: nation.slice(0, 3).toUpperCase() || 'UNT'
+    };
+  }
+
+  function toSlug(value) {
+    return String(value)
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  function deriveUnitTypeId(unit) {
+    if (typeof unit.unitTypeId === 'string' && unitTypeById.has(unit.unitTypeId)) {
+      return unit.unitTypeId;
+    }
+
+    if (typeof unit.id === 'string' && unitTypeById.has(unit.id)) {
+      return unit.id;
+    }
+
+    return 'hebrew';
+  }
+
+  function deriveUnitLabel(unitTypeId, fallbackLabel) {
+    if (typeof fallbackLabel === 'string' && fallbackLabel.trim()) {
+      return fallbackLabel.slice(0, 4).toUpperCase();
+    }
+
+    const unitType = unitTypeById.get(unitTypeId);
+    return unitType ? unitType.shortLabel : 'UNT';
+  }
+
+  function deriveUnitCountsFromUnits(units) {
+    const counts = {};
+
+    units.forEach((unit) => {
+      if (!unitTypeById.has(unit.unitTypeId)) {
+        return;
+      }
+
+      counts[unit.unitTypeId] = (counts[unit.unitTypeId] || 0) + 1;
+    });
+
+    return counts;
+  }
+
+  function normalizeUnitCounts(counts, units) {
+    const normalized = {};
+
+    if (counts && typeof counts === 'object') {
+      Object.entries(counts).forEach(([unitTypeId, rawCount]) => {
+        if (!unitTypeById.has(unitTypeId)) {
+          return;
+        }
+
+        const parsed = Number.parseInt(String(rawCount), 10);
+        normalized[unitTypeId] = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+      });
+    }
+
+    const derived = deriveUnitCountsFromUnits(units);
+    Object.entries(derived).forEach(([unitTypeId, count]) => {
+      normalized[unitTypeId] = Math.max(normalized[unitTypeId] || 0, count);
+    });
+
+    return normalized;
+  }
+
+  function adjustUnitTypeCount(unitTypeId, delta) {
+    if (!unitTypeById.has(unitTypeId)) {
+      return 0;
+    }
+
+    const current = state.unitCounts[unitTypeId] || 0;
+    const next = Math.max(0, current + delta);
+    state.unitCounts[unitTypeId] = next;
+    return next;
   }
 
   function saveState() {
@@ -769,8 +950,27 @@
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'unit';
-      button.textContent = unit.label;
       button.dataset.unitId = unit.id;
+
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      button.setAttribute('aria-label', unitType ? unitType.displayName : unit.label);
+
+      if (unitType) {
+        const image = document.createElement('img');
+        image.className = 'unit-image';
+        image.src = unitType.imagePath;
+        image.alt = unitType.displayName;
+        image.draggable = false;
+        image.addEventListener('error', () => {
+          button.classList.remove('has-image');
+          image.remove();
+          button.textContent = unit.label;
+        });
+        button.classList.add('has-image');
+        button.appendChild(image);
+      } else {
+        button.textContent = unit.label;
+      }
 
       const hasSpace = unit.spaceId && spacesById.has(unit.spaceId);
       const stackIndex = hasSpace ? stackCounters.get(unit.spaceId) || 0 : 0;
@@ -782,7 +982,8 @@
 
       if (hasSpace) {
         const space = spacesById.get(unit.spaceId);
-        button.title = `${unit.label} in ${space.name}`;
+        const unitDisplayName = unitType ? unitType.displayName : unit.label;
+        button.title = `${unitDisplayName} in ${space.name}`;
       }
 
       button.addEventListener('pointerdown', (event) => {
@@ -958,6 +1159,13 @@
     state.scrollTop = mapViewport.scrollTop;
     saveState();
   });
+
+  if (resetGameButton) {
+    resetGameButton.addEventListener('click', () => {
+      localStorage.removeItem(STORAGE_KEY);
+      window.location.reload();
+    });
+  }
 
   syncMapSize();
   renderUnits();

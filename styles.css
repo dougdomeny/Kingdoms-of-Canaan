@@ -56,6 +56,21 @@ main {
   font-family: Consolas, "Courier New", monospace;
 }
 
+#reset-game {
+  border: 1px solid #6a573e;
+  border-radius: 0.35rem;
+  background: #efe3c1;
+  color: #2b2118;
+  font-size: 0.86rem;
+  font-weight: 700;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+}
+
+#reset-game:hover {
+  background: #e5d5ac;
+}
+
 #map-viewport {
   width: 100%;
   height: 75vh;
@@ -133,6 +148,20 @@ main {
   cursor: grab;
   user-select: none;
   z-index: 3;
+}
+
+.unit.has-image {
+  background: transparent;
+}
+
+.unit-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  border-radius: 2px;
+  pointer-events: none;
+  user-select: none;
 }
 
 .unit:active,
