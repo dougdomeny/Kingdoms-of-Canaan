@@ -15,7 +15,58 @@
   const zoomRange = document.getElementById('zoom-range');
   const zoomValue = document.getElementById('zoom-value');
   const spaceCount = document.getElementById('space-count');
+  const currentTurnLabel = document.getElementById('current-turn');
+  const currentPhaseLabel = document.getElementById('current-phase');
+  const phaseHelpLabel = document.getElementById('phase-help');
+  const nextPhaseButton = document.getElementById('next-phase');
   const resetGameButton = document.getElementById('reset-game');
+
+  const TOTAL_TURNS = 9;
+  const PHASES = [
+    {
+      id: 'growth',
+      label: 'Growth Phase',
+      helpText: 'Leader enters and growth effects resolve.',
+      nextLabel: 'Advance to Action Phase'
+    },
+    {
+      id: 'action',
+      label: 'Action Phase',
+      helpText: 'Movement and combat are resolved in this phase.',
+      nextLabel: 'Advance to End Phase'
+    },
+    {
+      id: 'end',
+      label: 'End Phase',
+      helpText: 'Leaders and invaders are removed from the board.',
+      nextLabel: 'Advance to Next Turn'
+    }
+  ];
+
+  const leaderSchedule = new Map([
+    [1, { unitTypeId: 'hebrew-joshua', anchor: { x: 500, y: 953 }, preferredSpaceName: 'Jerusalem' }],
+    [5, { unitTypeId: 'hebrew-david', anchor: { x: 500, y: 953 }, preferredSpaceName: 'Jerusalem' }],
+    [6, { unitTypeId: 'egypt-shishak', anchor: { x: 180, y: 1115 }, preferredSpaceName: 'Philistia' }],
+    [7, { unitTypeId: 'aram-syria-hazael', anchor: { x: 835, y: 322 }, preferredSpaceName: 'Geshur' }],
+    [8, { unitTypeId: 'assyrria-shalmaneser', anchor: { x: 985, y: 334 }, preferredSpaceName: 'Argob' }],
+    [9, { unitTypeId: 'babylonia-nebuchadnezzar', anchor: { x: 977, y: 1115 }, preferredSpaceName: 'Eastern Desert' }]
+  ]);
+
+  const invadingReinforcementsByTurn = new Map([
+    [6, [{ unitTypeId: 'egypt-chariot', count: 4 }]],
+    [7, [{ unitTypeId: 'aram-syria', count: 4 }]],
+    [8, [{ unitTypeId: 'assyria', count: 8 }]],
+    [9, [{ unitTypeId: 'babylonia', count: 8 }]]
+  ]);
+
+  const invaderNations = new Set(['Egypt', 'Aram-Syria', 'Assyria', 'Assyrria', 'Babylonia']);
+  const nationEntrySpaceByName = new Map([
+    ['Egypt', 34],
+    ['Aram-Syria', 29],
+    ['Assyria', 29],
+    ['Assyrria', 29],
+    ['Babylonia', 29]
+  ]);
 
   const regionLabelAnchors = [
     { name: 'Dan', x: 664, y: 96 },
@@ -69,6 +120,11 @@
   ];
 
   const removedSpaceIndices = [5, 35];
+
+  const configuredSpaceCentroids = new Map([
+    [18, { x: 635, y: 870 }],
+    [29, { x: 1000, y: 130 }]
+  ]);
 
   const UNIT_IMAGE_FILES = [
     'Ammon.png',
@@ -193,8 +249,19 @@
     zoom: 1,
     scrollLeft: 0,
     scrollTop: 0,
+    currentTurn: 1,
+    currentPhaseIndex: 0,
+    spawnedLeaderTurns: [],
+    spawnedReinforcementTurns: [],
+    pendingEntryCombatUnitIds: [],
+    gameComplete: false,
     unitCounts: {
       ammon: 2,
+      amorite: 6,
+      canaan: 9,
+      hebrew: 26,
+      hittite: 5,
+      'hittite-chariot': 1,
       moab: 2,
       edom: 2,
       phoenicia: 3
@@ -208,7 +275,36 @@
       { id: 'edom-2', unitTypeId: 'edom', label: 'EDO', x: 760, y: 1480, spaceId: '' },
       { id: 'phoenicia-1', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
       { id: 'phoenicia-2', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
-      { id: 'phoenicia-3', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' }
+      { id: 'phoenicia-3', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
+      ...Array.from({ length: 26 }, (_, index) => ({
+        id: `hebrew-${index + 1}`,
+        unitTypeId: 'hebrew',
+        label: 'HEB',
+        x: 802,
+        y: 770,
+        spaceId: 'space-31'
+      })),
+      { id: 'amorite-1', unitTypeId: 'amorite', label: 'AMO', x: 547, y: 391, spaceId: 'space-4' },
+      { id: 'amorite-2', unitTypeId: 'amorite', label: 'AMO', x: 533, y: 470, spaceId: 'space-7' },
+      { id: 'amorite-3', unitTypeId: 'amorite', label: 'AMO', x: 609, y: 661, spaceId: 'space-11' },
+      { id: 'amorite-4', unitTypeId: 'amorite', label: 'AMO', x: 609, y: 661, spaceId: 'space-11' },
+      { id: 'amorite-5', unitTypeId: 'amorite', label: 'AMO', x: 464, y: 741, spaceId: 'space-15' },
+      { id: 'amorite-6', unitTypeId: 'amorite', label: 'AMO', x: 802, y: 770, spaceId: 'space-19' },
+      { id: 'hittite-1', unitTypeId: 'hittite', label: 'HIT', x: 617, y: 214, spaceId: 'space-2' },
+      { id: 'hittite-2', unitTypeId: 'hittite', label: 'HIT', x: 550, y: 155, spaceId: 'space-6' },
+      { id: 'hittite-3', unitTypeId: 'hittite', label: 'HIT', x: 664, y: 96, spaceId: 'space-8' },
+      { id: 'hittite-4', unitTypeId: 'hittite', label: 'HIT', x: 533, y: 470, spaceId: 'space-9' },
+      { id: 'hittite-5', unitTypeId: 'hittite', label: 'HIT', x: 775, y: 1265, spaceId: 'space-25' },
+      { id: 'hittite-chariot-1', unitTypeId: 'hittite-chariot', label: 'HIT', x: 533, y: 470, spaceId: 'space-9' },
+      { id: 'canaan-1', unitTypeId: 'canaan', label: 'CAN', x: 547, y: 391, spaceId: 'space-10' },
+      { id: 'canaan-2', unitTypeId: 'canaan', label: 'CAN', x: 533, y: 470, spaceId: 'space-12' },
+      { id: 'canaan-3', unitTypeId: 'canaan', label: 'CAN', x: 464, y: 741, spaceId: 'space-13' },
+      { id: 'canaan-4', unitTypeId: 'canaan', label: 'CAN', x: 542, y: 806, spaceId: 'space-14' },
+      { id: 'canaan-5', unitTypeId: 'canaan', label: 'CAN', x: 500, y: 953, spaceId: 'space-16' },
+      { id: 'canaan-6', unitTypeId: 'canaan', label: 'CAN', x: 615, y: 904, spaceId: 'space-17' },
+      { id: 'canaan-7', unitTypeId: 'canaan', label: 'CAN', x: 575, y: 990, spaceId: 'space-18' },
+      { id: 'canaan-8', unitTypeId: 'canaan', label: 'CAN', x: 620, y: 1060, spaceId: 'space-21' },
+      { id: 'canaan-9', unitTypeId: 'canaan', label: 'CAN', x: 493, y: 1036, spaceId: 'space-22' }
     ]
   };
 
@@ -261,11 +357,51 @@
           }));
 
       const unitCounts = normalizeUnitCounts(parsed.unitCounts, normalizedUnits);
+      const currentTurn = sanitizeInteger(parsed.currentTurn, 1, TOTAL_TURNS, defaultState.currentTurn);
+      const currentPhaseIndex = sanitizeInteger(
+        parsed.currentPhaseIndex,
+        0,
+        PHASES.length - 1,
+        defaultState.currentPhaseIndex
+      );
+      const spawnedLeaderTurns = Array.isArray(parsed.spawnedLeaderTurns)
+        ? Array.from(
+            new Set(
+              parsed.spawnedLeaderTurns
+                .map((value) => sanitizeInteger(value, 1, TOTAL_TURNS, 0))
+                .filter((value) => value > 0)
+            )
+          ).sort((first, second) => first - second)
+        : [];
+      const spawnedReinforcementTurns = Array.isArray(parsed.spawnedReinforcementTurns)
+        ? Array.from(
+            new Set(
+              parsed.spawnedReinforcementTurns
+                .map((value) => sanitizeInteger(value, 1, TOTAL_TURNS, 0))
+                .filter((value) => value > 0)
+            )
+          ).sort((first, second) => first - second)
+        : [];
+      const pendingEntryCombatUnitIds = Array.isArray(parsed.pendingEntryCombatUnitIds)
+        ? Array.from(
+            new Set(
+              parsed.pendingEntryCombatUnitIds
+                .map((value) => String(value || '').trim())
+                .filter(Boolean)
+            )
+          )
+        : [];
 
       return {
         zoom,
         scrollLeft: sanitizeNumber(parsed.scrollLeft, 0, BASE_WIDTH * zoom, 0),
         scrollTop: sanitizeNumber(parsed.scrollTop, 0, BASE_HEIGHT * zoom, 0),
+        currentTurn,
+        currentPhaseIndex,
+        spawnedLeaderTurns,
+        spawnedReinforcementTurns,
+        pendingEntryCombatUnitIds,
+        gameComplete: Boolean(parsed.gameComplete),
         unitCounts,
         units: normalizedUnits
       };
@@ -280,6 +416,10 @@
       return fallback;
     }
     return Math.min(max, Math.max(min, number));
+  }
+
+  function sanitizeInteger(value, min, max, fallback) {
+    return Math.round(sanitizeNumber(value, min, max, fallback));
   }
 
   function parseUnitTypeFromFileName(fileName) {
@@ -388,6 +528,303 @@
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }
 
+  function getCurrentPhase() {
+    return PHASES[state.currentPhaseIndex] || PHASES[0];
+  }
+
+  function canInteractWithUnit(unit) {
+    if (state.gameComplete) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function isLeaderUnitType(unitType) {
+    return Boolean(unitType && unitType.classification === 'leader');
+  }
+
+  function isInvaderUnitType(unitType) {
+    return Boolean(unitType && invaderNations.has(unitType.nation));
+  }
+
+  function syncUnitCounts() {
+    state.unitCounts = deriveUnitCountsFromUnits(state.units);
+  }
+
+  function updateTurnPhaseUi() {
+    const phase = getCurrentPhase();
+    if (currentTurnLabel) {
+      currentTurnLabel.textContent = `Turn ${state.currentTurn} of ${TOTAL_TURNS}`;
+    }
+
+    if (currentPhaseLabel) {
+      currentPhaseLabel.textContent = phase.label;
+    }
+
+    if (phaseHelpLabel) {
+      phaseHelpLabel.textContent = state.gameComplete
+        ? 'The ninth turn is complete.'
+        : phase.helpText;
+    }
+
+    if (nextPhaseButton) {
+      nextPhaseButton.disabled = state.gameComplete;
+      nextPhaseButton.textContent = state.gameComplete
+        ? 'Game Complete'
+        : state.currentTurn === TOTAL_TURNS && phase.id === 'end'
+          ? 'Finish Game'
+          : phase.nextLabel;
+    }
+  }
+
+  function findSpaceByName(name) {
+    if (!name) {
+      return null;
+    }
+
+    return detectedSpaces.find((space) => space.name === name) || null;
+  }
+
+  function findSpaceByIndex(index) {
+    return spacesById.get(`space-${index}`) || null;
+  }
+
+  function createUniqueUnitId(unitTypeId) {
+    let candidate = '';
+    do {
+      candidate = `${unitTypeId}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    } while (state.units.some((unit) => unit.id === candidate));
+    return candidate;
+  }
+
+  function getUnitsInSpace(spaceId, excludedUnitId = '') {
+    return state.units.filter((unit) => unit.spaceId === spaceId && unit.id !== excludedUnitId);
+  }
+
+  function getEligibleLeaderEntrySpaces(unitType, excludedUnitId = '') {
+    if (!isLeaderUnitType(unitType)) {
+      return [];
+    }
+
+    return detectedSpaces.filter((space) => {
+      const unitsInSpace = getUnitsInSpace(space.id, excludedUnitId);
+      return unitsInSpace.some((unit) => {
+        const occupyingType = unitTypeById.get(unit.unitTypeId);
+        return occupyingType && occupyingType.nation === unitType.nation;
+      });
+    });
+  }
+
+  function createUnitFromType(unitTypeId, anchor, preferredSpaceName) {
+    const unitType = unitTypeById.get(unitTypeId);
+    if (!unitType) {
+      return null;
+    }
+
+    const unit = {
+      id: createUniqueUnitId(unitTypeId),
+      unitTypeId,
+      label: deriveUnitLabel(unitTypeId),
+      x: toBoardX(anchor.x),
+      y: toBoardY(anchor.y),
+      spaceId: ''
+    };
+
+    const forcedEntrySpaceIndex = nationEntrySpaceByName.get(unitType.nation);
+    if (Number.isInteger(forcedEntrySpaceIndex)) {
+      const forcedEntrySpace = findSpaceByIndex(forcedEntrySpaceIndex);
+      if (forcedEntrySpace) {
+        snapUnitToSpace(unit, forcedEntrySpace);
+        return unit;
+      }
+    }
+
+    const eligibleLeaderSpaces = getEligibleLeaderEntrySpaces(unitType, unit.id);
+    if (isLeaderUnitType(unitType)) {
+      if (eligibleLeaderSpaces.length) {
+        const preferredSpace = findSpaceByName(preferredSpaceName);
+        const targetSpace = eligibleLeaderSpaces.find((space) => space.id === preferredSpace?.id) || eligibleLeaderSpaces[0];
+        snapUnitToSpace(unit, targetSpace);
+      }
+    } else {
+      const preferredSpace = findSpaceByName(preferredSpaceName);
+      if (preferredSpace) {
+        snapUnitToSpace(unit, preferredSpace);
+      }
+    }
+
+    return unit;
+  }
+
+  function ensureLeaderForCurrentTurn() {
+    if (state.gameComplete || getCurrentPhase().id === 'end') {
+      return;
+    }
+
+    const scheduledLeader = leaderSchedule.get(state.currentTurn);
+    if (!scheduledLeader || state.spawnedLeaderTurns.includes(state.currentTurn)) {
+      return;
+    }
+
+    const spawnedUnits = [];
+
+    const leaderUnit = createUnitFromType(
+      scheduledLeader.unitTypeId,
+      scheduledLeader.anchor,
+      scheduledLeader.preferredSpaceName
+    );
+    if (leaderUnit) {
+      spawnedUnits.push(leaderUnit);
+    }
+
+    const reinforcements = invadingReinforcementsByTurn.get(state.currentTurn) || [];
+    reinforcements.forEach((spec) => {
+      for (let i = 0; i < spec.count; i += 1) {
+        const reinforcement = createUnitFromType(spec.unitTypeId, scheduledLeader.anchor, scheduledLeader.preferredSpaceName);
+        if (reinforcement) {
+          spawnedUnits.push(reinforcement);
+        }
+      }
+    });
+
+    if (!spawnedUnits.length) {
+      return;
+    }
+
+    state.units.push(...spawnedUnits);
+    state.spawnedLeaderTurns = [...state.spawnedLeaderTurns, state.currentTurn].sort((first, second) => first - second);
+    syncUnitCounts();
+  }
+
+  function ensureTurnThreePhilistiaReinforcements() {
+    if (state.gameComplete || getCurrentPhase().id === 'end' || state.currentTurn !== 3) {
+      return;
+    }
+
+    if (state.spawnedReinforcementTurns.includes(3)) {
+      return;
+    }
+
+    const spawnedUnits = [];
+    const reinforcementSpecs = [
+      { unitTypeId: 'philistia', count: 3 },
+      { unitTypeId: 'philistia-chariot', count: 2 }
+    ];
+
+    reinforcementSpecs.forEach((spec) => {
+      for (let i = 0; i < spec.count; i += 1) {
+        const unit = createUnitFromType(spec.unitTypeId, { x: 180, y: 1115 }, 'Philistia');
+        if (unit) {
+          spawnedUnits.push(unit);
+        }
+      }
+    });
+
+    if (!spawnedUnits.length) {
+      return;
+    }
+
+    state.units.push(...spawnedUnits);
+    state.pendingEntryCombatUnitIds = spawnedUnits.map((unit) => unit.id);
+    state.spawnedReinforcementTurns = [...state.spawnedReinforcementTurns, 3];
+    syncUnitCounts();
+  }
+
+  function resolvePendingEntryCombatBeforeMovement() {
+    if (state.currentTurn !== 3 || !state.pendingEntryCombatUnitIds.length) {
+      return;
+    }
+
+    const pendingUnitIdSet = new Set(state.pendingEntryCombatUnitIds);
+    const pendingUnits = state.units.filter((unit) => pendingUnitIdSet.has(unit.id));
+    if (!pendingUnits.length) {
+      state.pendingEntryCombatUnitIds = [];
+      return;
+    }
+
+    const entrySpaceId = pendingUnits[0].spaceId;
+    if (!entrySpaceId) {
+      state.pendingEntryCombatUnitIds = [];
+      return;
+    }
+
+    const unitsInEntrySpace = state.units.filter((unit) => unit.spaceId === entrySpaceId);
+    const enemyUnits = unitsInEntrySpace.filter((unit) => {
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      return unitType && unitType.nation !== 'Philistia';
+    });
+
+    if (!enemyUnits.length) {
+      state.pendingEntryCombatUnitIds = [];
+      return;
+    }
+
+    const philistiaReinforcements = unitsInEntrySpace.filter((unit) => pendingUnitIdSet.has(unit.id));
+    const combatRounds = Math.min(philistiaReinforcements.length, enemyUnits.length);
+    const removedIds = new Set([
+      ...philistiaReinforcements.slice(0, combatRounds).map((unit) => unit.id),
+      ...enemyUnits.slice(0, combatRounds).map((unit) => unit.id)
+    ]);
+
+    state.units = state.units.filter((unit) => !removedIds.has(unit.id));
+    state.pendingEntryCombatUnitIds = [];
+    syncUnitCounts();
+  }
+
+  function applyEndPhaseCleanup() {
+    const filteredUnits = state.units.filter((unit) => {
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      return !isLeaderUnitType(unitType) && !isInvaderUnitType(unitType);
+    });
+
+    if (filteredUnits.length === state.units.length) {
+      return;
+    }
+
+    state.units = filteredUnits;
+    syncUnitCounts();
+  }
+
+  function syncTurnState() {
+    if (getCurrentPhase().id === 'end') {
+      applyEndPhaseCleanup();
+    } else {
+      ensureLeaderForCurrentTurn();
+      ensureTurnThreePhilistiaReinforcements();
+      if (getCurrentPhase().id === 'action') {
+        resolvePendingEntryCombatBeforeMovement();
+      }
+    }
+  }
+
+  function advanceTurnPhase() {
+    if (state.gameComplete) {
+      return;
+    }
+
+    const phase = getCurrentPhase();
+
+    if (phase.id === 'growth') {
+      state.currentPhaseIndex = 1;
+      resolvePendingEntryCombatBeforeMovement();
+    } else if (phase.id === 'action') {
+      state.currentPhaseIndex = 2;
+      applyEndPhaseCleanup();
+    } else if (state.currentTurn >= TOTAL_TURNS) {
+      state.gameComplete = true;
+    } else {
+      state.currentTurn += 1;
+      state.currentPhaseIndex = 0;
+      ensureLeaderForCurrentTurn();
+      ensureTurnThreePhilistiaReinforcements();
+    }
+
+    renderUnits();
+    updateTurnPhaseUi();
+    saveState();
+  }
+
   function updateMouseCoordsText(sourceX, sourceY) {
     if (!mouseCoords) {
       return;
@@ -470,6 +907,11 @@
   function canUnitMoveToSpace(unit, targetSpace) {
     if (!targetSpace) {
       return false;
+    }
+
+    const unitType = unitTypeById.get(unit.unitTypeId);
+    if (isLeaderUnitType(unitType) && getCurrentPhase().id === 'growth') {
+      return getEligibleLeaderEntrySpaces(unitType, unit.id).some((space) => space.id === targetSpace.id);
     }
 
     if (!unit.spaceId || !spacesById.has(unit.spaceId)) {
@@ -843,6 +1285,22 @@
     mergedOutput.forEach((space) => spaces.push(space));
   }
 
+  function applyConfiguredSpaceCentroids(spaces) {
+    spaces.forEach((space) => {
+      const override = configuredSpaceCentroids.get(space.index);
+      if (!override) {
+        return;
+      }
+
+      space.centroidX = override.x;
+      space.centroidY = override.y;
+      space.minX = Math.min(space.minX, override.x);
+      space.minY = Math.min(space.minY, override.y);
+      space.maxX = Math.max(space.maxX, override.x);
+      space.maxY = Math.max(space.maxY, override.y);
+    });
+  }
+
   function renderSpaceMarkers(spaces) {
     if (!spacesLayer) {
       return;
@@ -951,6 +1409,8 @@
       button.type = 'button';
       button.className = 'unit';
       button.dataset.unitId = unit.id;
+      const unitLocked = !canInteractWithUnit(unit);
+      button.classList.toggle('unit-locked', unitLocked);
 
       const unitType = unitTypeById.get(unit.unitTypeId);
       button.setAttribute('aria-label', unitType ? unitType.displayName : unit.label);
@@ -986,7 +1446,21 @@
         button.title = `${unitDisplayName} in ${space.name}`;
       }
 
+      if (unitLocked) {
+        button.title = button.title
+          ? `${button.title} — movement disabled after game completion`
+          : 'Movement disabled after game completion';
+      } else if (unitType && isLeaderUnitType(unitType) && getCurrentPhase().id === 'growth') {
+        button.title = button.title
+          ? `${button.title} — place on any space containing another ${unitType.nation} unit`
+          : `Place on any space containing another ${unitType.nation} unit`;
+      }
+
       button.addEventListener('pointerdown', (event) => {
+        if (!canInteractWithUnit(unit)) {
+          return;
+        }
+
         dragState = {
           pointerId: event.pointerId,
           unitId: unit.id,
@@ -1126,6 +1600,7 @@
     detectedSpaces.push(...extraction.spaces);
     addSupplementalEdgeSpaces(detectedSpaces);
     mergeConfiguredSpaces(detectedSpaces, extraction.spaceIdMap, mergedSpaceGroups, removedSpaceIndices);
+    applyConfiguredSpaceCentroids(detectedSpaces);
     assignSpaceNames(detectedSpaces);
 
     spaceLookupByPixel = extraction.spaceIdMap;
@@ -1133,9 +1608,11 @@
     adjacentSpacePairs = normalizeConfiguredAdjacentSpacePairs(configuredAdjacentSpacePairs);
     rebuildAdjacentSpaceLookup();
     snapAllUnitsToSpaces();
+    syncTurnState();
     renderAdjacencyLines();
     renderSpaceMarkers(detectedSpaces);
     renderUnits();
+    updateTurnPhaseUi();
     saveState();
   }
 
@@ -1167,7 +1644,12 @@
     });
   }
 
+  if (nextPhaseButton) {
+    nextPhaseButton.addEventListener('click', advanceTurnPhase);
+  }
+
   syncMapSize();
+  updateTurnPhaseUi();
   renderUnits();
   mapViewport.scrollLeft = state.scrollLeft;
   mapViewport.scrollTop = state.scrollTop;

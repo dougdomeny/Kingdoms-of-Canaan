@@ -14,6 +14,12 @@
 
     <main>
       <section class="toolbar" aria-label="Map controls">
+        <div class="turn-status" aria-live="polite">
+          <span id="current-turn">Turn 1 of 9</span>
+          <span id="current-phase">Growth Phase</span>
+          <span id="phase-help">Leader enters and growth effects resolve.</span>
+        </div>
+        <button id="next-phase" type="button">Advance to Action Phase</button>
         <label for="zoom-range">Zoom</label>
         <input id="zoom-range" type="range" min="0.5" max="2" step="0.1" value="1" />
         <span id="zoom-value">100%</span>
