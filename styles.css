@@ -67,6 +67,7 @@ main {
 
 #map-canvas {
   position: relative;
+  --map-zoom: 1;
   width: 1035px;
   height: 1590px;
   overflow: hidden;
@@ -80,6 +81,20 @@ main {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  z-index: 2;
+}
+
+#adjacency-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+#adjacency-layer .adjacency-line {
+  stroke: #1ea63a;
+  fill: none;
+  stroke-width: 1px;
 }
 
 .space-marker {
@@ -88,7 +103,7 @@ main {
   padding: 0.2rem 0.4rem;
   border: 1px solid rgba(58, 29, 0, 0.75);
   border-radius: 0.5rem;
-  background: rgba(255, 245, 210, 0.9);
+  background: rgba(255, 245, 210, 0.75);
   color: #3f2b10;
   font-size: 0.7rem;
   font-weight: 700;
@@ -98,29 +113,26 @@ main {
   text-align: center;
 }
 
-.city {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: #4f3d27;
-  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.7);
-  pointer-events: none;
-}
-
 .unit {
   position: absolute;
   transform: translate(-50%, -50%);
-  min-width: 2.4rem;
-  padding: 0.35rem 0.45rem;
+  width: calc(0.75in * var(--map-zoom));
+  height: calc(0.75in * var(--map-zoom));
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  text-align: center;
   border: 1px solid #3d2f1f;
-  border-radius: 0.35rem;
-  background: #f8ebc4;
+  border-radius: 3px;
+  background: #8ad4ff;
   color: #1a120a;
   font-weight: 700;
-  font-size: 0.75rem;
+  font-size: calc(0.235in * var(--map-zoom));
   cursor: grab;
   user-select: none;
+  z-index: 3;
 }
 
 .unit:active,

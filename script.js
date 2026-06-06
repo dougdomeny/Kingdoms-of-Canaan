@@ -8,6 +8,7 @@
 
   const mapViewport = document.getElementById('map-viewport');
   const mapCanvas = document.getElementById('map-canvas');
+  const adjacencyLayer = document.getElementById('adjacency-layer');
   const spacesLayer = document.getElementById('spaces-layer');
   const showSpaceNamesToggle = document.getElementById('show-space-names');
   const mouseCoords = document.getElementById('mouse-coords');
@@ -57,10 +58,83 @@
 
   const mergedSpaceGroups = [
     [2, 3],
+    [17, 23],
     [26, 28]
   ];
 
   const removedSpaceIndices = [5, 35];
+
+  const configuredAdjacentSpacePairs = [
+    [1, 2],
+    [1, 6],
+    [1, 8],
+    [1, 9],
+    [2, 6],
+    [2, 4],
+    [4, 29],
+    [4, 7],
+    [7, 8],
+    [6, 8],
+    [11, 29],
+    [9, 11],
+    [9, 10],
+    [9, 12],
+    [9, 13],
+    [11, 15],
+    [11, 30],
+    [10, 12],
+    [10, 14],
+    [12, 13],
+    [13, 16],
+    [13, 18],
+    [13, 15],
+    [29, 30],
+    [15, 30],
+    [19, 30],
+    [19, 31],
+    [19, 26],
+    [26, 31],
+    [26, 33],
+    [32, 33],
+    [12, 14],
+    [12, 17],
+    [12, 16],
+    [14, 17],
+    [14, 20],
+    [16, 17],
+    [16, 18],
+    [16, 21],
+    [21, 22],
+    [22, 24],
+    [17, 25],
+    [20, 25],
+    [22, 25],
+    [24, 25],
+    [20, 27],
+    [20, 34],
+    [24, 27],
+    [24, 32],
+    [27, 32],
+    [32, 34],
+    [26, 32],
+    [31, 33],
+    [15, 18],
+    [15, 19],
+    [18, 24],
+    [18, 22],
+    [27, 34],
+    [18, 19],
+    [30, 31],
+    [17, 22],
+    [17, 20],
+    [25, 27],
+    [11, 13],
+    [7, 11],
+    [8, 9],
+    [8, 11],
+    [4, 6],
+    [7, 29]
+  ];
 
   const defaultState = {
     zoom: 1,
@@ -69,13 +143,14 @@
     units: [
       { id: 'israel', label: 'ISR', x: 420, y: 620, spaceId: '' },
       { id: 'judah', label: 'JUD', x: 500, y: 720, spaceId: '' },
-      { id: 'assyria', label: 'ASS', x: 1080, y: 340, spaceId: '' }
+      { id: 'hebrew', label: 'HEB', x: 1080, y: 340, spaceId: '' }
     ]
   };
 
   const detectedSpaces = [];
   let spacesById = new Map();
   let spaceLookupByPixel = null;
+  let adjacentSpacePairs = [];
   let sourceMapWidth = 1035;
   let sourceMapHeight = 1590;
 
@@ -156,11 +231,71 @@
   }
 
   function syncMapSize() {
-    mapCanvas.style.width = `${Math.round(BASE_WIDTH * state.zoom)}px`;
-    mapCanvas.style.height = `${Math.round(BASE_HEIGHT * state.zoom)}px`;
+    const canvasWidth = Math.round(BASE_WIDTH * state.zoom);
+    const canvasHeight = Math.round(BASE_HEIGHT * state.zoom);
+    mapCanvas.style.width = `${canvasWidth}px`;
+    mapCanvas.style.height = `${canvasHeight}px`;
+    mapCanvas.style.setProperty('--map-zoom', String(state.zoom));
+    if (adjacencyLayer) {
+      adjacencyLayer.setAttribute('width', String(canvasWidth));
+      adjacencyLayer.setAttribute('height', String(canvasHeight));
+      adjacencyLayer.setAttribute('viewBox', `0 0 ${canvasWidth} ${canvasHeight}`);
+    }
     zoomRange.value = String(state.zoom);
     zoomValue.textContent = `${Math.round(state.zoom * 100)}%`;
+    renderAdjacencyLines();
     renderSpaceMarkers(detectedSpaces);
+  }
+
+  function normalizeConfiguredAdjacentSpacePairs(pairs) {
+    const pairKeys = new Set();
+
+    pairs.forEach(([first, second]) => {
+      const low = Math.min(first, second);
+      const high = Math.max(first, second);
+      pairKeys.add(`${low}:${high}`);
+    });
+
+    return Array.from(pairKeys)
+      .map((key) => {
+        const [first, second] = key.split(':').map((value) => Number.parseInt(value, 10));
+        return [first, second];
+      })
+      .sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+  }
+
+  function renderAdjacencyLines() {
+    if (!adjacencyLayer) {
+      return;
+    }
+
+    adjacencyLayer.innerHTML = '';
+    if (!adjacentSpacePairs.length) {
+      return;
+    }
+
+    const strokeWidth = 1;
+    const dash = 6;
+    const gap = 4;
+    const svgNamespace = 'http://www.w3.org/2000/svg';
+
+    adjacentSpacePairs.forEach(([firstIndex, secondIndex]) => {
+      const first = spacesById.get(`space-${firstIndex}`);
+      const second = spacesById.get(`space-${secondIndex}`);
+      if (!first || !second) {
+        return;
+      }
+
+      const line = document.createElementNS(svgNamespace, 'line');
+      line.classList.add('adjacency-line');
+      line.setAttribute('x1', String(Math.round(toBoardX(first.centroidX) * state.zoom)));
+      line.setAttribute('y1', String(Math.round(toBoardY(first.centroidY) * state.zoom)));
+      line.setAttribute('x2', String(Math.round(toBoardX(second.centroidX) * state.zoom)));
+      line.setAttribute('y2', String(Math.round(toBoardY(second.centroidY) * state.zoom)));
+      line.setAttribute('stroke-width', String(strokeWidth));
+      line.setAttribute('stroke-dasharray', `${dash} ${gap}`);
+      adjacencyLayer.appendChild(line);
+    });
   }
 
   function rgbToHsv(r, g, b) {
@@ -754,7 +889,9 @@
 
     spaceLookupByPixel = extraction.spaceIdMap;
     rebuildSpaceLookups();
+    adjacentSpacePairs = normalizeConfiguredAdjacentSpacePairs(configuredAdjacentSpacePairs);
     snapAllUnitsToSpaces();
+    renderAdjacencyLines();
     renderSpaceMarkers(detectedSpaces);
     renderUnits();
     saveState();
