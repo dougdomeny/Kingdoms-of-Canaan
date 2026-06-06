@@ -18,18 +18,22 @@
 
   const regionLabelAnchors = [
     { name: 'Dan', x: 664, y: 96 },
-    { name: 'Upper Galilee', x: 617, y: 214 },
+    { name: 'Phoenicia', x: 550, y: 155 },
+        { name: 'Upper Galilee', x: 617, y: 214 },
     { name: 'Lower Galilee', x: 547, y: 391 },
     { name: 'Jezreel', x: 533, y: 470 },
-    { name: 'Dor', x: 238, y: 600 },
+    { name: 'Dor', x: 413, y: 533 },
     { name: 'Joppa', x: 283, y: 838 },
     { name: 'Philistia', x: 180, y: 1115 },
     { name: 'Wilderness', x: 186, y: 1320 },
     { name: 'Samaria', x: 464, y: 741 },
+        { name: 'Shechem', x: 609, y: 661 },
     { name: 'Shephela', x: 406, y: 925 },
     { name: 'Bethel', x: 542, y: 806 },
     { name: 'Jerusalem', x: 500, y: 953 },
+        { name: 'Bethlehem', x: 493, y: 1036 },
     { name: 'Benjamin', x: 575, y: 990 },
+        { name: 'Jericho', x: 615, y: 904 },
     { name: 'Jeshimon', x: 620, y: 1060 },
     { name: 'Hebron', x: 360, y: 1150 },
     { name: 'Negev', x: 384, y: 1310 },
@@ -43,7 +47,8 @@
     { name: 'Mishor', x: 792, y: 990 },
     { name: 'Moab', x: 775, y: 1265 },
     { name: 'Valley of Siddim', x: 588, y: 1414 },
-    { name: 'Edom', x: 760, y: 1480 }
+    { name: 'Edom', x: 760, y: 1480 },
+        { name: 'Eastern Desert', x: 977, y: 1115 }
   ];
 
   const supplementalEdgeSpaceSeeds = [
@@ -151,6 +156,7 @@
   let spacesById = new Map();
   let spaceLookupByPixel = null;
   let adjacentSpacePairs = [];
+  let adjacentSpaceLookup = new Map();
   let sourceMapWidth = 1035;
   let sourceMapHeight = 1590;
 
@@ -262,6 +268,40 @@
         return [first, second];
       })
       .sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+  }
+
+  function rebuildAdjacentSpaceLookup() {
+    adjacentSpaceLookup = new Map();
+
+    adjacentSpacePairs.forEach(([first, second]) => {
+      if (!adjacentSpaceLookup.has(first)) {
+        adjacentSpaceLookup.set(first, new Set());
+      }
+      if (!adjacentSpaceLookup.has(second)) {
+        adjacentSpaceLookup.set(second, new Set());
+      }
+
+      adjacentSpaceLookup.get(first).add(second);
+      adjacentSpaceLookup.get(second).add(first);
+    });
+  }
+
+  function canUnitMoveToSpace(unit, targetSpace) {
+    if (!targetSpace) {
+      return false;
+    }
+
+    if (!unit.spaceId || !spacesById.has(unit.spaceId)) {
+      return true;
+    }
+
+    if (unit.spaceId === targetSpace.id) {
+      return true;
+    }
+
+    const currentSpace = spacesById.get(unit.spaceId);
+    const allowedNeighbors = adjacentSpaceLookup.get(currentSpace.index);
+    return Boolean(allowedNeighbors && allowedNeighbors.has(targetSpace.index));
   }
 
   function renderAdjacencyLines() {
@@ -804,7 +844,7 @@
 
       if (detectedSpaces.length) {
         const targetSpace = findSpaceForBoardPoint(boardX, boardY);
-        if (targetSpace) {
+        if (targetSpace && canUnitMoveToSpace(unit, targetSpace)) {
           snapUnitToSpace(unit, targetSpace);
         }
       } else {
@@ -890,6 +930,7 @@
     spaceLookupByPixel = extraction.spaceIdMap;
     rebuildSpaceLookups();
     adjacentSpacePairs = normalizeConfiguredAdjacentSpacePairs(configuredAdjacentSpacePairs);
+    rebuildAdjacentSpaceLookup();
     snapAllUnitsToSpaces();
     renderAdjacencyLines();
     renderSpaceMarkers(detectedSpaces);
