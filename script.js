@@ -19,10 +19,6 @@
   const currentPhaseLabel = document.getElementById('current-phase');
   const phaseHelpLabel = document.getElementById('phase-help');
   const nextPhaseButton = document.getElementById('next-phase');
-  const currentTurnLabel = document.getElementById('current-turn');
-  const currentPhaseLabel = document.getElementById('current-phase');
-  const phaseHelpLabel = document.getElementById('phase-help');
-  const nextPhaseButton = document.getElementById('next-phase');
   const resetGameButton = document.getElementById('reset-game');
 
   const TOTAL_TURNS = 9;
@@ -266,11 +262,6 @@
       hebrew: 26,
       hittite: 5,
       'hittite-chariot': 1,
-      amorite: 6,
-      canaan: 9,
-      hebrew: 26,
-      hittite: 5,
-      'hittite-chariot': 1,
       moab: 2,
       edom: 2,
       phoenicia: 3
@@ -284,36 +275,6 @@
       { id: 'edom-2', unitTypeId: 'edom', label: 'EDO', x: 760, y: 1480, spaceId: '' },
       { id: 'phoenicia-1', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
       { id: 'phoenicia-2', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
-      { id: 'phoenicia-3', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
-      ...Array.from({ length: 26 }, (_, index) => ({
-        id: `hebrew-${index + 1}`,
-        unitTypeId: 'hebrew',
-        label: 'HEB',
-        x: 802,
-        y: 770,
-        spaceId: 'space-31'
-      })),
-      { id: 'amorite-1', unitTypeId: 'amorite', label: 'AMO', x: 547, y: 391, spaceId: 'space-4' },
-      { id: 'amorite-2', unitTypeId: 'amorite', label: 'AMO', x: 533, y: 470, spaceId: 'space-7' },
-      { id: 'amorite-3', unitTypeId: 'amorite', label: 'AMO', x: 609, y: 661, spaceId: 'space-11' },
-      { id: 'amorite-4', unitTypeId: 'amorite', label: 'AMO', x: 609, y: 661, spaceId: 'space-11' },
-      { id: 'amorite-5', unitTypeId: 'amorite', label: 'AMO', x: 464, y: 741, spaceId: 'space-15' },
-      { id: 'amorite-6', unitTypeId: 'amorite', label: 'AMO', x: 802, y: 770, spaceId: 'space-19' },
-      { id: 'hittite-1', unitTypeId: 'hittite', label: 'HIT', x: 617, y: 214, spaceId: 'space-2' },
-      { id: 'hittite-2', unitTypeId: 'hittite', label: 'HIT', x: 550, y: 155, spaceId: 'space-6' },
-      { id: 'hittite-3', unitTypeId: 'hittite', label: 'HIT', x: 664, y: 96, spaceId: 'space-8' },
-      { id: 'hittite-4', unitTypeId: 'hittite', label: 'HIT', x: 533, y: 470, spaceId: 'space-9' },
-      { id: 'hittite-5', unitTypeId: 'hittite', label: 'HIT', x: 775, y: 1265, spaceId: 'space-25' },
-      { id: 'hittite-chariot-1', unitTypeId: 'hittite-chariot', label: 'HIT', x: 533, y: 470, spaceId: 'space-9' },
-      { id: 'canaan-1', unitTypeId: 'canaan', label: 'CAN', x: 547, y: 391, spaceId: 'space-10' },
-      { id: 'canaan-2', unitTypeId: 'canaan', label: 'CAN', x: 533, y: 470, spaceId: 'space-12' },
-      { id: 'canaan-3', unitTypeId: 'canaan', label: 'CAN', x: 464, y: 741, spaceId: 'space-13' },
-      { id: 'canaan-4', unitTypeId: 'canaan', label: 'CAN', x: 542, y: 806, spaceId: 'space-14' },
-      { id: 'canaan-5', unitTypeId: 'canaan', label: 'CAN', x: 500, y: 953, spaceId: 'space-16' },
-      { id: 'canaan-6', unitTypeId: 'canaan', label: 'CAN', x: 615, y: 904, spaceId: 'space-17' },
-      { id: 'canaan-7', unitTypeId: 'canaan', label: 'CAN', x: 575, y: 990, spaceId: 'space-18' },
-      { id: 'canaan-8', unitTypeId: 'canaan', label: 'CAN', x: 620, y: 1060, spaceId: 'space-21' },
-      { id: 'canaan-9', unitTypeId: 'canaan', label: 'CAN', x: 493, y: 1036, spaceId: 'space-22' }
       { id: 'phoenicia-3', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
       ...Array.from({ length: 26 }, (_, index) => ({
         id: `hebrew-${index + 1}`,
@@ -455,10 +416,6 @@
       return fallback;
     }
     return Math.min(max, Math.max(min, number));
-  }
-
-  function sanitizeInteger(value, min, max, fallback) {
-    return Math.round(sanitizeNumber(value, min, max, fallback));
   }
 
   function sanitizeInteger(value, min, max, fallback) {
@@ -957,11 +914,6 @@
       return getEligibleLeaderEntrySpaces(unitType, unit.id).some((space) => space.id === targetSpace.id);
     }
 
-    const unitType = unitTypeById.get(unit.unitTypeId);
-    if (isLeaderUnitType(unitType) && getCurrentPhase().id === 'growth') {
-      return getEligibleLeaderEntrySpaces(unitType, unit.id).some((space) => space.id === targetSpace.id);
-    }
-
     if (!unit.spaceId || !spacesById.has(unit.spaceId)) {
       return true;
     }
@@ -1349,22 +1301,6 @@
     });
   }
 
-  function applyConfiguredSpaceCentroids(spaces) {
-    spaces.forEach((space) => {
-      const override = configuredSpaceCentroids.get(space.index);
-      if (!override) {
-        return;
-      }
-
-      space.centroidX = override.x;
-      space.centroidY = override.y;
-      space.minX = Math.min(space.minX, override.x);
-      space.minY = Math.min(space.minY, override.y);
-      space.maxX = Math.max(space.maxX, override.x);
-      space.maxY = Math.max(space.maxY, override.y);
-    });
-  }
-
   function renderSpaceMarkers(spaces) {
     if (!spacesLayer) {
       return;
@@ -1475,8 +1411,6 @@
       button.dataset.unitId = unit.id;
       const unitLocked = !canInteractWithUnit(unit);
       button.classList.toggle('unit-locked', unitLocked);
-      const unitLocked = !canInteractWithUnit(unit);
-      button.classList.toggle('unit-locked', unitLocked);
 
       const unitType = unitTypeById.get(unit.unitTypeId);
       button.setAttribute('aria-label', unitType ? unitType.displayName : unit.label);
@@ -1522,21 +1456,7 @@
           : `Place on any space containing another ${unitType.nation} unit`;
       }
 
-      if (unitLocked) {
-        button.title = button.title
-          ? `${button.title} — movement disabled after game completion`
-          : 'Movement disabled after game completion';
-      } else if (unitType && isLeaderUnitType(unitType) && getCurrentPhase().id === 'growth') {
-        button.title = button.title
-          ? `${button.title} — place on any space containing another ${unitType.nation} unit`
-          : `Place on any space containing another ${unitType.nation} unit`;
-      }
-
       button.addEventListener('pointerdown', (event) => {
-        if (!canInteractWithUnit(unit)) {
-          return;
-        }
-
         if (!canInteractWithUnit(unit)) {
           return;
         }
@@ -1681,7 +1601,6 @@
     addSupplementalEdgeSpaces(detectedSpaces);
     mergeConfiguredSpaces(detectedSpaces, extraction.spaceIdMap, mergedSpaceGroups, removedSpaceIndices);
     applyConfiguredSpaceCentroids(detectedSpaces);
-    applyConfiguredSpaceCentroids(detectedSpaces);
     assignSpaceNames(detectedSpaces);
 
     spaceLookupByPixel = extraction.spaceIdMap;
@@ -1690,11 +1609,9 @@
     rebuildAdjacentSpaceLookup();
     snapAllUnitsToSpaces();
     syncTurnState();
-    syncTurnState();
     renderAdjacencyLines();
     renderSpaceMarkers(detectedSpaces);
     renderUnits();
-    updateTurnPhaseUi();
     updateTurnPhaseUi();
     saveState();
   }
@@ -1731,12 +1648,7 @@
     nextPhaseButton.addEventListener('click', advanceTurnPhase);
   }
 
-  if (nextPhaseButton) {
-    nextPhaseButton.addEventListener('click', advanceTurnPhase);
-  }
-
   syncMapSize();
-  updateTurnPhaseUi();
   updateTurnPhaseUi();
   renderUnits();
   mapViewport.scrollLeft = state.scrollLeft;
