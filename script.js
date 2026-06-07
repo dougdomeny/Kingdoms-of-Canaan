@@ -26,13 +26,13 @@
     {
       id: 'growth',
       label: 'Growth Phase',
-      helpText: 'Leader enters and growth effects resolve.',
+      helpText: 'Leaders and invaders enter. Growth resolves now unless a leader is present, then it resolves in End Phase.',
       nextLabel: 'Advance to Action Phase'
     },
     {
       id: 'action',
       label: 'Action Phase',
-      helpText: 'Movement and combat are resolved in this phase.',
+      helpText: 'Move units in any order and resolve battles when entering enemy regions.',
       nextLabel: 'Advance to End Phase'
     },
     {
@@ -60,6 +60,41 @@
   ]);
 
   const invaderNations = new Set(['Egypt', 'Aram-Syria', 'Assyria', 'Assyrria', 'Babylonia']);
+  const REGION_RULES_BY_NAME = new Map([
+    ['Dan', { growth: 1, terrain: 'standard' }],
+    ['Phoenicia', { growth: 2, terrain: 'plains' }],
+    ['Upper Galilee', { growth: 1, terrain: 'hills' }],
+    ['Lower Galilee', { growth: 2, terrain: 'standard' }],
+    ['Jezreel', { growth: 3, terrain: 'plains' }],
+    ['Dor', { growth: 2, terrain: 'standard' }],
+    ['Joppa', { growth: 3, terrain: 'plains' }],
+    ['Philistia', { growth: 3, terrain: 'plains' }],
+    ['Wilderness', { growth: 0, terrain: 'desert' }],
+    ['Samaria', { growth: 1, terrain: 'standard' }],
+    ['Shechem', { growth: 1, terrain: 'standard' }],
+    ['Shephela', { growth: 2, terrain: 'standard' }],
+    ['Bethel', { growth: 1, terrain: 'hills' }],
+    ['Jerusalem', { growth: 1, terrain: 'city' }],
+    ['Bethlehem', { growth: 1, terrain: 'hills' }],
+    ['Benjamin', { growth: 1, terrain: 'hills' }],
+    ['Jericho', { growth: 1, terrain: 'plains' }],
+    ['Jeshimon', { growth: 0, terrain: 'hills' }],
+    ['Hebron', { growth: 1, terrain: 'standard' }],
+    ['Negev', { growth: 0, terrain: 'desert' }],
+    ['Bashan', { growth: 1, terrain: 'standard' }],
+    ['Geshur', { growth: 1, terrain: 'standard' }],
+    ['Argob', { growth: 1, terrain: 'standard' }],
+    ['Gilead', { growth: 2, terrain: 'standard' }],
+    ['Jazer', { growth: 1, terrain: 'hills' }],
+    ['Ammon', { growth: 1, terrain: 'standard' }],
+    ['Mishor', { growth: 1, terrain: 'standard' }],
+    ['Moab', { growth: 1, terrain: 'standard' }],
+    ['Valley of Siddim', { growth: 0, terrain: 'desert' }],
+    ['Edom', { growth: 1, terrain: 'standard' }],
+    ['Eastern Desert', { growth: 0, terrain: 'desert' }]
+  ]);
+  const UNIT_GROWTH_THRESHOLD = 3;
+  const CHARIOT_GROWTH_THRESHOLD = 5;
   const nationEntrySpaceByName = new Map([
     ['Egypt', 34],
     ['Aram-Syria', 29],
@@ -254,11 +289,17 @@
     spawnedLeaderTurns: [],
     spawnedReinforcementTurns: [],
     pendingEntryCombatUnitIds: [],
+    processedGrowthTurns: [],
+    growthPointsByNation: {},
+    vassalByNation: {},
+    retreatedUnitIds: [],
+    activatedUnitIds: [],
     gameComplete: false,
     unitCounts: {
       ammon: 2,
       amorite: 6,
       canaan: 9,
+      'egypt-chariot': 1,
       hebrew: 26,
       hittite: 5,
       'hittite-chariot': 1,
@@ -273,6 +314,7 @@
       { id: 'moab-2', unitTypeId: 'moab', label: 'MOA', x: 775, y: 1265, spaceId: '' },
       { id: 'edom-1', unitTypeId: 'edom', label: 'EDO', x: 760, y: 1480, spaceId: '' },
       { id: 'edom-2', unitTypeId: 'edom', label: 'EDO', x: 760, y: 1480, spaceId: '' },
+      { id: 'egypt-chariot-1', unitTypeId: 'egypt-chariot', label: 'EGY', x: 384, y: 1310, spaceId: 'space-20' },
       { id: 'phoenicia-1', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
       { id: 'phoenicia-2', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
       { id: 'phoenicia-3', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
@@ -391,6 +433,19 @@
             )
           )
         : [];
+      const processedGrowthTurns = Array.isArray(parsed.processedGrowthTurns)
+        ? Array.from(
+            new Set(
+              parsed.processedGrowthTurns
+                .map((value) => sanitizeInteger(value, 1, TOTAL_TURNS, 0))
+                .filter((value) => value > 0)
+            )
+          ).sort((first, second) => first - second)
+        : [];
+      const growthPointsByNation = normalizeGrowthPointsByNation(parsed.growthPointsByNation);
+      const vassalByNation = normalizeVassalByNation(parsed.vassalByNation);
+      const retreatedUnitIds = normalizeUniqueStringList(parsed.retreatedUnitIds);
+      const activatedUnitIds = normalizeUniqueStringList(parsed.activatedUnitIds);
 
       return {
         zoom,
@@ -401,6 +456,11 @@
         spawnedLeaderTurns,
         spawnedReinforcementTurns,
         pendingEntryCombatUnitIds,
+        processedGrowthTurns,
+        growthPointsByNation,
+        vassalByNation,
+        retreatedUnitIds,
+        activatedUnitIds,
         gameComplete: Boolean(parsed.gameComplete),
         unitCounts,
         units: normalizedUnits
@@ -513,6 +573,63 @@
     return normalized;
   }
 
+  function normalizeUniqueStringList(value) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return Array.from(
+      new Set(
+        value
+          .map((entry) => String(entry || '').trim())
+          .filter(Boolean)
+      )
+    );
+  }
+
+  function normalizeGrowthPointsByNation(value) {
+    const normalized = {};
+    if (!value || typeof value !== 'object') {
+      return normalized;
+    }
+
+    Object.entries(value).forEach(([nationName, points]) => {
+      if (!nationName || typeof points !== 'object' || !points) {
+        return;
+      }
+
+      normalized[nationName] = {
+        unit: Math.max(0, sanitizeInteger(points.unit, 0, 9999, 0)),
+        chariot: Math.max(0, sanitizeInteger(points.chariot, 0, 9999, 0))
+      };
+    });
+
+    return normalized;
+  }
+
+  function normalizeVassalByNation(value) {
+    const normalized = {};
+    if (!value || typeof value !== 'object') {
+      return normalized;
+    }
+
+    Object.entries(value).forEach(([nationName, overlordNation]) => {
+      if (!nationName || !overlordNation) {
+        return;
+      }
+
+      const normalizedNation = String(nationName).trim();
+      const normalizedOverlord = String(overlordNation).trim();
+      if (!normalizedNation || !normalizedOverlord || normalizedNation === normalizedOverlord) {
+        return;
+      }
+
+      normalized[normalizedNation] = normalizedOverlord;
+    });
+
+    return normalized;
+  }
+
   function adjustUnitTypeCount(unitTypeId, delta) {
     if (!unitTypeById.has(unitTypeId)) {
       return 0;
@@ -537,6 +654,20 @@
       return false;
     }
 
+    const phase = getCurrentPhase();
+    if (phase.id === 'end') {
+      return false;
+    }
+
+    const unitType = unitTypeById.get(unit.unitTypeId);
+    if (phase.id === 'growth' && !isLeaderUnitType(unitType)) {
+      return false;
+    }
+
+    if (phase.id === 'action' && state.retreatedUnitIds.includes(unit.id)) {
+      return false;
+    }
+
     return true;
   }
 
@@ -546,6 +677,185 @@
 
   function isInvaderUnitType(unitType) {
     return Boolean(unitType && invaderNations.has(unitType.nation));
+  }
+
+  function getUnitNation(unit) {
+    if (!unit) {
+      return '';
+    }
+
+    const unitType = unitTypeById.get(unit.unitTypeId);
+    return unitType ? unitType.nation : '';
+  }
+
+  function getSpaceBaseName(space) {
+    if (!space || !space.name) {
+      return '';
+    }
+
+    return String(space.name).replace(/\s+\d+$/, '');
+  }
+
+  function getSpaceTerrain(space) {
+    const baseName = getSpaceBaseName(space);
+    const regionRules = REGION_RULES_BY_NAME.get(baseName);
+    return regionRules ? regionRules.terrain : 'standard';
+  }
+
+  function isHillSpace(space) {
+    return getSpaceTerrain(space) === 'hills';
+  }
+
+  function getSpaceGrowthValue(space) {
+    if (!space) {
+      return 0;
+    }
+
+    const baseName = getSpaceBaseName(space);
+    const regionRules = REGION_RULES_BY_NAME.get(baseName);
+    if (!regionRules) {
+      return 1;
+    }
+
+    return Math.max(0, Math.min(3, sanitizeInteger(regionRules.growth, 0, 3, 1)));
+  }
+
+  function getSpaceTerrainCode(space) {
+    const terrain = getSpaceTerrain(space);
+    if (terrain === 'plains') {
+      return 'P';
+    }
+
+    if (terrain === 'hills') {
+      return 'H';
+    }
+
+    return '';
+  }
+
+  function getSpaceMarkerSuffix(space) {
+    const growth = getSpaceGrowthValue(space);
+    const terrainCode = getSpaceTerrainCode(space);
+    return terrainCode ? `${terrainCode}${growth}` : String(growth);
+  }
+
+  function getNationUnitTypeForGrowth(nationName, classification) {
+    return unitTypes.find((unitType) => {
+      if (unitType.nation !== nationName) {
+        return false;
+      }
+
+      if (classification === 'chariot') {
+        return unitType.classification === 'chariot';
+      }
+
+      return unitType.classification === 'standard';
+    }) || null;
+  }
+
+  function getOverlordNation(nationName) {
+    let current = nationName;
+    const visited = new Set();
+
+    while (current && state.vassalByNation[current] && !visited.has(current)) {
+      visited.add(current);
+      current = state.vassalByNation[current];
+    }
+
+    return current || nationName;
+  }
+
+  function getControlledSpacesByNation() {
+    const groupedBySpace = new Map();
+
+    state.units.forEach((unit) => {
+      if (!unit.spaceId) {
+        return;
+      }
+
+      const nation = getUnitNation(unit);
+      if (!nation) {
+        return;
+      }
+
+      if (!groupedBySpace.has(unit.spaceId)) {
+        groupedBySpace.set(unit.spaceId, new Set());
+      }
+
+      groupedBySpace.get(unit.spaceId).add(nation);
+    });
+
+    const controlled = new Map();
+    groupedBySpace.forEach((nations, spaceId) => {
+      if (nations.size !== 1) {
+        return;
+      }
+
+      const nation = Array.from(nations)[0];
+      if (!controlled.has(nation)) {
+        controlled.set(nation, []);
+      }
+
+      controlled.get(nation).push(spaceId);
+    });
+
+    controlled.forEach((spaceIds) => {
+      spaceIds.sort((first, second) => {
+        const firstIndex = spacesById.get(first)?.index || 0;
+        const secondIndex = spacesById.get(second)?.index || 0;
+        return firstIndex - secondIndex;
+      });
+    });
+
+    return controlled;
+  }
+
+  function getLandPointsByNation() {
+    const controlledSpaces = getControlledSpacesByNation();
+    const landPoints = {};
+
+    controlledSpaces.forEach((spaceIds, nationName) => {
+      const overlordNation = getOverlordNation(nationName);
+      const growthPoints = spaceIds.reduce((sum, spaceId) => {
+        const space = spacesById.get(spaceId);
+        return sum + getSpaceGrowthValue(space);
+      }, 0);
+      landPoints[overlordNation] = (landPoints[overlordNation] || 0) + growthPoints;
+    });
+
+    return landPoints;
+  }
+
+  function getEligibleGrowthPlacementSpaces(nationName, options = {}) {
+    const { requireNonHill = false } = options;
+    const controlledSpaces = getControlledSpacesByNation().get(nationName) || [];
+    const preferredSpaces = controlledSpaces
+      .map((spaceId) => spacesById.get(spaceId))
+      .filter(Boolean)
+      .filter((space) => (requireNonHill ? !isHillSpace(space) : true));
+
+    if (preferredSpaces.length) {
+      return preferredSpaces;
+    }
+
+    const fallbackSpaces = state.units
+      .filter((unit) => getUnitNation(unit) === nationName)
+      .map((unit) => spacesById.get(unit.spaceId))
+      .filter(Boolean)
+      .filter((space) => (requireNonHill ? !isHillSpace(space) : true));
+
+    const deduped = [];
+    const ids = new Set();
+    fallbackSpaces.forEach((space) => {
+      if (ids.has(space.id)) {
+        return;
+      }
+
+      ids.add(space.id);
+      deduped.push(space);
+    });
+
+    return deduped.sort((first, second) => first.index - second.index);
   }
 
   function syncUnitCounts() {
@@ -602,6 +912,296 @@
     return state.units.filter((unit) => unit.spaceId === spaceId && unit.id !== excludedUnitId);
   }
 
+  function getNationsInSpace(spaceId) {
+    const nations = new Set();
+    getUnitsInSpace(spaceId).forEach((unit) => {
+      const nation = getUnitNation(unit);
+      if (nation) {
+        nations.add(nation);
+      }
+    });
+    return nations;
+  }
+
+  function getUnitCountByNation(nationName) {
+    return state.units.reduce((count, unit) => count + (getUnitNation(unit) === nationName ? 1 : 0), 0);
+  }
+
+  function getControlledRegionCountByNation(nationName) {
+    const controlledSpaces = getControlledSpacesByNation();
+    return (controlledSpaces.get(nationName) || []).length;
+  }
+
+  function evaluateVassalBreakFree() {
+    const controlledSpaces = getControlledSpacesByNation();
+
+    Object.entries(state.vassalByNation).forEach(([vassalNation, overlordNation]) => {
+      const vassalControlledSpaces = controlledSpaces.get(vassalNation) || [];
+      if (vassalControlledSpaces.length < 2) {
+        return;
+      }
+
+      const overlordPresent = state.units.some(
+        (unit) => getUnitNation(unit) === overlordNation && vassalControlledSpaces.includes(unit.spaceId)
+      );
+
+      if (!overlordPresent) {
+        delete state.vassalByNation[vassalNation];
+      }
+    });
+  }
+
+  function canDefenderSubmit(defenderNation, attackerNation) {
+    if (!defenderNation || !attackerNation || defenderNation === attackerNation) {
+      return false;
+    }
+
+    if (defenderNation === 'Canaan' && attackerNation === 'Hebrew') {
+      return false;
+    }
+
+    const attackerUnits = getUnitCountByNation(attackerNation);
+    const defenderUnits = getUnitCountByNation(defenderNation);
+    if (!defenderUnits || attackerUnits < defenderUnits * 3) {
+      return false;
+    }
+
+    return getControlledRegionCountByNation(defenderNation) <= 2;
+  }
+
+  function applySubmission(defenderNation, attackerNation) {
+    state.vassalByNation[defenderNation] = attackerNation;
+  }
+
+  function clampCombatDie(value) {
+    return Math.max(1, Math.min(6, value));
+  }
+
+  function getTerrainCombatModifier(unitType, space) {
+    if (!unitType || unitType.classification !== 'chariot') {
+      return 0;
+    }
+
+    const terrain = getSpaceTerrain(space);
+    if (terrain === 'plains') {
+      return 1;
+    }
+
+    if (terrain === 'hills') {
+      return -1;
+    }
+
+    return 0;
+  }
+
+  function buildCombatDice(units, space) {
+    const dice = units.map((unit) => {
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      const baseRoll = Math.floor(Math.random() * 6) + 1;
+      return {
+        unitId: unit.id,
+        value: clampCombatDie(baseRoll + getTerrainCombatModifier(unitType, space))
+      };
+    });
+
+    const hasLeader = units.some((unit) => {
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      return isLeaderUnitType(unitType);
+    });
+
+    if (hasLeader && dice.length) {
+      let highestIndex = 0;
+      for (let i = 1; i < dice.length; i += 1) {
+        if (dice[i].value > dice[highestIndex].value) {
+          highestIndex = i;
+        }
+      }
+      dice[highestIndex].value = clampCombatDie(dice[highestIndex].value + 1);
+    }
+
+    return dice.sort((first, second) => second.value - first.value);
+  }
+
+  function resolveCombatDiceMatchups(attackerDice, defenderDice) {
+    const comparisons = Math.min(attackerDice.length, defenderDice.length);
+    let attackerLosses = 0;
+    let defenderLosses = 0;
+
+    for (let i = 0; i < comparisons; i += 1) {
+      if (attackerDice[i].value > defenderDice[i].value) {
+        defenderLosses += 1;
+      } else {
+        attackerLosses += 1;
+      }
+    }
+
+    return { attackerLosses, defenderLosses };
+  }
+
+  function chooseCasualtyUnitIds(units, lossCount, sideLabel) {
+    if (!lossCount || !units.length) {
+      return [];
+    }
+
+    const available = [...units];
+    const selected = [];
+
+    for (let i = 0; i < lossCount && available.length; i += 1) {
+      const optionsText = available
+        .map((unit, index) => {
+          const unitType = unitTypeById.get(unit.unitTypeId);
+          const name = unitType ? unitType.displayName : unit.label;
+          return `${index + 1}: ${name}`;
+        })
+        .join('\n');
+
+      const choice = window.prompt(
+        `${sideLabel} remove ${i + 1} of ${lossCount}. Enter option number:\n${optionsText}`,
+        '1'
+      );
+      const parsed = Number.parseInt(String(choice || '1'), 10);
+      const selectedIndex = Number.isFinite(parsed) ? parsed - 1 : 0;
+      const casualty = available[selectedIndex] || available[0];
+      selected.push(casualty.id);
+      const casualtyIndex = available.findIndex((unit) => unit.id === casualty.id);
+      if (casualtyIndex >= 0) {
+        available.splice(casualtyIndex, 1);
+      }
+    }
+
+    return selected;
+  }
+
+  function removeUnitsById(unitIds) {
+    if (!unitIds.length) {
+      return;
+    }
+
+    const removed = new Set(unitIds);
+    state.units = state.units.filter((unit) => !removed.has(unit.id));
+    state.retreatedUnitIds = state.retreatedUnitIds.filter((unitId) => !removed.has(unitId));
+    state.activatedUnitIds = state.activatedUnitIds.filter((unitId) => !removed.has(unitId));
+    syncUnitCounts();
+  }
+
+  function getReachableRetreatSpaces(startSpaceId, nationName) {
+    if (!startSpaceId || !spacesById.has(startSpaceId)) {
+      return [];
+    }
+
+    const startSpace = spacesById.get(startSpaceId);
+    const queue = [startSpace];
+    const visited = new Set([startSpace.id]);
+    const reachable = [startSpace];
+
+    while (queue.length) {
+      const currentSpace = queue.shift();
+      const neighbors = adjacentSpaceLookup.get(currentSpace.index) || new Set();
+
+      neighbors.forEach((neighborIndex) => {
+        const nextSpace = findSpaceByIndex(neighborIndex);
+        if (!nextSpace || visited.has(nextSpace.id)) {
+          return;
+        }
+
+        const unitsInSpace = getUnitsInSpace(nextSpace.id);
+        const isFriendlyOrEmpty = unitsInSpace.every((unit) => getUnitNation(unit) === nationName);
+        if (!isFriendlyOrEmpty) {
+          return;
+        }
+
+        visited.add(nextSpace.id);
+        reachable.push(nextSpace);
+        queue.push(nextSpace);
+      });
+    }
+
+    return reachable.sort((first, second) => first.index - second.index);
+  }
+
+  function retreatAttackingUnits(spaceId, attackerNation, previousSpaceId) {
+    const retreatingUnits = getUnitsInSpace(spaceId).filter((unit) => getUnitNation(unit) === attackerNation);
+    if (!retreatingUnits.length) {
+      return;
+    }
+
+    const previousSpace = spacesById.get(previousSpaceId);
+    if (previousSpace) {
+      retreatingUnits.forEach((unit) => snapUnitToSpace(unit, previousSpace));
+    }
+
+    const retreatStartSpaceId = previousSpace ? previousSpace.id : retreatingUnits[0].spaceId;
+    const retreatOptions = getReachableRetreatSpaces(retreatStartSpaceId, attackerNation);
+    if (retreatOptions.length > 1) {
+      const optionsText = retreatOptions
+        .map((space, index) => `${index + 1}: ${space.index} ${space.name}`)
+        .join('\n');
+      const choice = window.prompt(
+        `Choose retreat destination for ${attackerNation} (or cancel to stay in first retreat space):\n${optionsText}`,
+        '1'
+      );
+      const parsed = Number.parseInt(String(choice || '1'), 10);
+      const selectedIndex = Number.isFinite(parsed) ? parsed - 1 : 0;
+      const destination = retreatOptions[selectedIndex] || retreatOptions[0];
+      retreatingUnits.forEach((unit) => snapUnitToSpace(unit, destination));
+    }
+
+    const retreatedSet = new Set(state.retreatedUnitIds);
+    retreatingUnits.forEach((unit) => retreatedSet.add(unit.id));
+    state.retreatedUnitIds = Array.from(retreatedSet);
+  }
+
+  function resolveCombatAtSpace(spaceId, attackerNation, previousSpaceId = '') {
+    const space = spacesById.get(spaceId);
+    if (!space) {
+      return { attackerRetreated: false, defenderSubmitted: false };
+    }
+
+    while (true) {
+      const attackerUnits = getUnitsInSpace(spaceId).filter((unit) => getUnitNation(unit) === attackerNation);
+      const defenderUnits = getUnitsInSpace(spaceId).filter((unit) => getUnitNation(unit) !== attackerNation);
+
+      if (!attackerUnits.length || !defenderUnits.length) {
+        return { attackerRetreated: false, defenderSubmitted: false };
+      }
+
+      const defenderNationSet = new Set(defenderUnits.map((unit) => getUnitNation(unit)).filter(Boolean));
+      const defendersSingleNation = defenderNationSet.size === 1 ? Array.from(defenderNationSet)[0] : '';
+      if (defendersSingleNation && canDefenderSubmit(defendersSingleNation, attackerNation)) {
+        const shouldSubmit = window.confirm(
+          `${defendersSingleNation} can submit to ${attackerNation}. Submit now and become a vassal?`
+        );
+        if (shouldSubmit) {
+          applySubmission(defendersSingleNation, attackerNation);
+          return { attackerRetreated: false, defenderSubmitted: true };
+        }
+      }
+
+      const attackerDice = buildCombatDice(attackerUnits, space);
+      const defenderDice = buildCombatDice(defenderUnits, space);
+      const roundLosses = resolveCombatDiceMatchups(attackerDice, defenderDice);
+
+      const attackerCasualties = chooseCasualtyUnitIds(attackerUnits, roundLosses.attackerLosses, `${attackerNation} (attacker)`);
+      const defenderCasualties = chooseCasualtyUnitIds(defenderUnits, roundLosses.defenderLosses, 'Defender');
+      removeUnitsById([...attackerCasualties, ...defenderCasualties]);
+
+      const attackerStillPresent = getUnitsInSpace(spaceId).some((unit) => getUnitNation(unit) === attackerNation);
+      const defendersStillPresent = getUnitsInSpace(spaceId).some((unit) => getUnitNation(unit) !== attackerNation);
+      if (!attackerStillPresent || !defendersStillPresent) {
+        return { attackerRetreated: false, defenderSubmitted: false };
+      }
+
+      const canRetreat = Boolean(previousSpaceId && spacesById.has(previousSpaceId));
+      if (canRetreat) {
+        const shouldRetreat = window.confirm(`${attackerNation} may retreat after this round. Retreat now?`);
+        if (shouldRetreat) {
+          retreatAttackingUnits(spaceId, attackerNation, previousSpaceId);
+          return { attackerRetreated: true, defenderSubmitted: false };
+        }
+      }
+    }
+  }
+
   function getEligibleLeaderEntrySpaces(unitType, excludedUnitId = '') {
     if (!isLeaderUnitType(unitType)) {
       return [];
@@ -655,6 +1255,102 @@
     }
 
     return unit;
+  }
+
+  function hasLeaderOnBoard() {
+    return state.units.some((unit) => {
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      return isLeaderUnitType(unitType);
+    });
+  }
+
+  function canNationReceiveGrowth(nationName) {
+    if (!nationName) {
+      return false;
+    }
+
+    if (state.vassalByNation[nationName]) {
+      return false;
+    }
+
+    if (invaderNations.has(nationName)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function ensureNationGrowthPoints(nationName) {
+    if (!state.growthPointsByNation[nationName]) {
+      state.growthPointsByNation[nationName] = {
+        unit: 0,
+        chariot: 0
+      };
+    }
+
+    return state.growthPointsByNation[nationName];
+  }
+
+  function createGrowthUnit(unitType, placementSpace) {
+    const unit = {
+      id: createUniqueUnitId(unitType.id),
+      unitTypeId: unitType.id,
+      label: deriveUnitLabel(unitType.id),
+      x: toBoardX(placementSpace.centroidX),
+      y: toBoardY(placementSpace.centroidY),
+      spaceId: ''
+    };
+
+    snapUnitToSpace(unit, placementSpace);
+    return unit;
+  }
+
+  function applyGrowthForCurrentTurn() {
+    if (state.processedGrowthTurns.includes(state.currentTurn)) {
+      return;
+    }
+
+    const landPointsByNation = getLandPointsByNation();
+    const spawnedUnits = [];
+
+    Object.entries(landPointsByNation).forEach(([nationName, landPoints]) => {
+      if (!canNationReceiveGrowth(nationName) || !Number.isFinite(landPoints) || landPoints <= 0) {
+        return;
+      }
+
+      const growthPoints = ensureNationGrowthPoints(nationName);
+      growthPoints.unit += landPoints;
+      growthPoints.chariot += landPoints;
+
+      const unitType = getNationUnitTypeForGrowth(nationName, 'standard');
+      while (unitType && growthPoints.unit >= UNIT_GROWTH_THRESHOLD) {
+        const placementSpaces = getEligibleGrowthPlacementSpaces(nationName, { requireNonHill: false });
+        if (!placementSpaces.length) {
+          break;
+        }
+
+        spawnedUnits.push(createGrowthUnit(unitType, placementSpaces[0]));
+        growthPoints.unit -= UNIT_GROWTH_THRESHOLD;
+      }
+
+      const chariotType = getNationUnitTypeForGrowth(nationName, 'chariot');
+      while (chariotType && growthPoints.chariot >= CHARIOT_GROWTH_THRESHOLD) {
+        const placementSpaces = getEligibleGrowthPlacementSpaces(nationName, { requireNonHill: true });
+        if (!placementSpaces.length) {
+          break;
+        }
+
+        spawnedUnits.push(createGrowthUnit(chariotType, placementSpaces[0]));
+        growthPoints.chariot -= CHARIOT_GROWTH_THRESHOLD;
+      }
+    });
+
+    if (spawnedUnits.length) {
+      state.units.push(...spawnedUnits);
+      syncUnitCounts();
+    }
+
+    state.processedGrowthTurns = [...state.processedGrowthTurns, state.currentTurn].sort((first, second) => first - second);
   }
 
   function ensureLeaderForCurrentTurn() {
@@ -732,44 +1428,34 @@
   }
 
   function resolvePendingEntryCombatBeforeMovement() {
-    if (state.currentTurn !== 3 || !state.pendingEntryCombatUnitIds.length) {
+    if (!state.pendingEntryCombatUnitIds.length) {
       return;
     }
 
     const pendingUnitIdSet = new Set(state.pendingEntryCombatUnitIds);
-    const pendingUnits = state.units.filter((unit) => pendingUnitIdSet.has(unit.id));
-    if (!pendingUnits.length) {
-      state.pendingEntryCombatUnitIds = [];
-      return;
-    }
+    const pendingUnits = state.units.filter((unit) => pendingUnitIdSet.has(unit.id) && unit.spaceId);
+    const groupedBySpaceAndNation = new Map();
 
-    const entrySpaceId = pendingUnits[0].spaceId;
-    if (!entrySpaceId) {
-      state.pendingEntryCombatUnitIds = [];
-      return;
-    }
+    pendingUnits.forEach((unit) => {
+      const nation = getUnitNation(unit);
+      if (!nation) {
+        return;
+      }
 
-    const unitsInEntrySpace = state.units.filter((unit) => unit.spaceId === entrySpaceId);
-    const enemyUnits = unitsInEntrySpace.filter((unit) => {
-      const unitType = unitTypeById.get(unit.unitTypeId);
-      return unitType && unitType.nation !== 'Philistia';
+      const key = `${unit.spaceId}|${nation}`;
+      if (!groupedBySpaceAndNation.has(key)) {
+        groupedBySpaceAndNation.set(key, { spaceId: unit.spaceId, nation });
+      }
     });
 
-    if (!enemyUnits.length) {
-      state.pendingEntryCombatUnitIds = [];
-      return;
-    }
+    groupedBySpaceAndNation.forEach(({ spaceId, nation }) => {
+      const enemyPresent = getUnitsInSpace(spaceId).some((unit) => getUnitNation(unit) && getUnitNation(unit) !== nation);
+      if (enemyPresent) {
+        resolveCombatAtSpace(spaceId, nation);
+      }
+    });
 
-    const philistiaReinforcements = unitsInEntrySpace.filter((unit) => pendingUnitIdSet.has(unit.id));
-    const combatRounds = Math.min(philistiaReinforcements.length, enemyUnits.length);
-    const removedIds = new Set([
-      ...philistiaReinforcements.slice(0, combatRounds).map((unit) => unit.id),
-      ...enemyUnits.slice(0, combatRounds).map((unit) => unit.id)
-    ]);
-
-    state.units = state.units.filter((unit) => !removedIds.has(unit.id));
     state.pendingEntryCombatUnitIds = [];
-    syncUnitCounts();
   }
 
   function applyEndPhaseCleanup() {
@@ -787,14 +1473,26 @@
   }
 
   function syncTurnState() {
-    if (getCurrentPhase().id === 'end') {
-      applyEndPhaseCleanup();
-    } else {
-      ensureLeaderForCurrentTurn();
-      ensureTurnThreePhilistiaReinforcements();
-      if (getCurrentPhase().id === 'action') {
-        resolvePendingEntryCombatBeforeMovement();
+    const phase = getCurrentPhase();
+    evaluateVassalBreakFree();
+
+    if (phase.id === 'end') {
+      if (hasLeaderOnBoard()) {
+        applyGrowthForCurrentTurn();
       }
+      applyEndPhaseCleanup();
+      return;
+    }
+
+    ensureLeaderForCurrentTurn();
+    ensureTurnThreePhilistiaReinforcements();
+
+    if (phase.id === 'growth' && !hasLeaderOnBoard()) {
+      applyGrowthForCurrentTurn();
+    }
+
+    if (phase.id === 'action') {
+      resolvePendingEntryCombatBeforeMovement();
     }
   }
 
@@ -810,16 +1508,16 @@
       resolvePendingEntryCombatBeforeMovement();
     } else if (phase.id === 'action') {
       state.currentPhaseIndex = 2;
-      applyEndPhaseCleanup();
     } else if (state.currentTurn >= TOTAL_TURNS) {
       state.gameComplete = true;
     } else {
       state.currentTurn += 1;
       state.currentPhaseIndex = 0;
-      ensureLeaderForCurrentTurn();
-      ensureTurnThreePhilistiaReinforcements();
+      state.activatedUnitIds = [];
+      state.retreatedUnitIds = [];
     }
 
+    syncTurnState();
     renderUnits();
     updateTurnPhaseUi();
     saveState();
@@ -909,9 +1607,31 @@
       return false;
     }
 
+    const phase = getCurrentPhase();
+    if (phase.id === 'end') {
+      return false;
+    }
+
     const unitType = unitTypeById.get(unit.unitTypeId);
     if (isLeaderUnitType(unitType) && getCurrentPhase().id === 'growth') {
       return getEligibleLeaderEntrySpaces(unitType, unit.id).some((space) => space.id === targetSpace.id);
+    }
+
+    if (phase.id === 'growth') {
+      return false;
+    }
+
+    if (state.retreatedUnitIds.includes(unit.id)) {
+      return false;
+    }
+
+    const unitNation = getUnitNation(unit);
+    const overlordNation = state.vassalByNation[unitNation];
+    if (overlordNation) {
+      const targetHasOverlord = getUnitsInSpace(targetSpace.id).some((occupant) => getUnitNation(occupant) === overlordNation);
+      if (targetHasOverlord) {
+        return false;
+      }
     }
 
     if (!unit.spaceId || !spacesById.has(unit.spaceId)) {
@@ -1311,10 +2031,11 @@
     spaces.forEach((space) => {
       const marker = document.createElement('div');
       marker.className = 'space-marker';
+      const suffix = getSpaceMarkerSuffix(space);
       marker.textContent = showSpaceNamesToggle && showSpaceNamesToggle.checked
-        ? `${space.index} ${space.name}`
-        : String(space.index);
-      marker.title = space.name || `Space ${space.index}`;
+        ? `${space.index} ${suffix} ${space.name}`
+        : `${space.index} ${suffix}`;
+      marker.title = `${space.name || `Space ${space.index}`} (${suffix})`;
       marker.style.left = `${Math.round(toBoardX(space.centroidX) * state.zoom)}px`;
       marker.style.top = `${Math.round(toBoardY(space.centroidY) * state.zoom)}px`;
       spacesLayer.appendChild(marker);
@@ -1520,7 +2241,23 @@
       if (detectedSpaces.length) {
         const targetSpace = findSpaceForBoardPoint(boardX, boardY);
         if (targetSpace && canUnitMoveToSpace(unit, targetSpace)) {
+          const originSpaceId = unit.spaceId;
+          const movingNation = getUnitNation(unit);
           snapUnitToSpace(unit, targetSpace);
+
+          const activatedSet = new Set(state.activatedUnitIds);
+          activatedSet.add(unit.id);
+          state.activatedUnitIds = Array.from(activatedSet);
+
+          if (getCurrentPhase().id === 'action' && movingNation) {
+            const enemyPresent = getUnitsInSpace(targetSpace.id).some(
+              (occupant) => getUnitNation(occupant) && getUnitNation(occupant) !== movingNation
+            );
+
+            if (enemyPresent) {
+              resolveCombatAtSpace(targetSpace.id, movingNation, originSpaceId);
+            }
+          }
         }
       } else {
         unit.x = boardX;
