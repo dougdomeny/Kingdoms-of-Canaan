@@ -206,6 +206,24 @@ main {
   user-select: none;
 }
 
+.unit-stack-count {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  min-width: 1.6em;
+  padding: 0.05em 0.3em;
+  border: 1px solid rgba(45, 25, 0, 0.75);
+  border-radius: 0.25em;
+  background: rgba(255, 245, 210, 0.95);
+  color: #2b2118;
+  font-size: calc(0.12in * var(--map-zoom));
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+  pointer-events: none;
+  z-index: 2;
+}
+
 .unit:active,
 .unit.dragging {
   cursor: grabbing;
@@ -214,4 +232,94 @@ main {
 
 .unit.unit-locked {
   cursor: default;
+}
+
+.combat-action-button {
+  position: absolute;
+  transform: translate(-100%, -50%);
+  border: 1px solid #3f2b10;
+  border-radius: 4px;
+  background: #f3e3b8;
+  color: #2b2118;
+  font-size: calc(0.12in * var(--map-zoom));
+  font-weight: 700;
+  padding: 0.12em 0.45em;
+  cursor: pointer;
+  z-index: 20;
+  white-space: nowrap;
+}
+
+.combat-action-button:hover {
+  background: #ecd39a;
+}
+
+.combat-dice-panel {
+  position: absolute;
+  transform: translate(-100%, -50%);
+  display: grid;
+  gap: 0.25rem;
+  z-index: 19;
+  pointer-events: none;
+}
+
+.combat-dice-row {
+  display: flex;
+  align-items: center;
+  gap: 0.16rem;
+}
+
+.combat-dice-label {
+  min-width: 5.5em;
+  font-size: calc(0.1in * var(--map-zoom));
+  font-weight: 700;
+  color: #2b2118;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+
+.combat-die {
+  border-radius: 10%;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  align-items: center;
+  justify-items: center;
+}
+
+.combat-die.attacker {
+  background: #b82323;
+}
+
+.combat-die.defender {
+  background: #ffffff;
+}
+
+.combat-die .pip {
+  display: block;
+  width: 46%;
+  height: 46%;
+  border-radius: 999px;
+  opacity: 0;
+  position: relative;
+  z-index: 2;
+}
+
+.combat-die .pip.visible {
+  opacity: 1;
+}
+
+.combat-die.attacker .pip {
+  background: #ffffff;
+}
+
+.combat-die.defender .pip {
+  background: #444444;
+}
+
+.debug-start-die {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  z-index: 18;
+  pointer-events: none;
 }
