@@ -24,6 +24,7 @@
   const phaseHelpLabel = document.getElementById('phase-help');
   const nextPhaseButton = document.getElementById('next-phase');
   const resetGameButton = document.getElementById('reset-game');
+  const combatStatusLabel = document.getElementById('combat-status');
 
   const TOTAL_TURNS = 9;
   const PHASES = [
@@ -369,6 +370,52 @@
   const state = loadState();
   let dragState = null;
   const combatDisplayBySpaceId = new Map();
+  let combatStatusTimeoutId = 0;
+  let promptUnsupportedNotified = false;
+
+  function setCombatStatus(message, type = 'info', autoHideMs = 5000) {
+    if (!combatStatusLabel) {
+      return;
+    }
+
+    combatStatusLabel.textContent = String(message || '').trim();
+    combatStatusLabel.classList.remove('is-info', 'is-success', 'is-error');
+    if (type === 'success') {
+      combatStatusLabel.classList.add('is-success');
+    } else if (type === 'error') {
+      combatStatusLabel.classList.add('is-error');
+    } else {
+      combatStatusLabel.classList.add('is-info');
+    }
+
+    if (combatStatusTimeoutId) {
+      window.clearTimeout(combatStatusTimeoutId);
+      combatStatusTimeoutId = 0;
+    }
+
+    if (autoHideMs > 0) {
+      combatStatusTimeoutId = window.setTimeout(() => {
+        combatStatusLabel.textContent = '';
+        combatStatusLabel.classList.remove('is-info', 'is-success', 'is-error');
+        combatStatusTimeoutId = 0;
+      }, autoHideMs);
+    }
+  }
+
+  function promptWithFallback(message, defaultValue = '') {
+    try {
+      if (typeof window.prompt === 'function') {
+        return window.prompt(message, defaultValue);
+      }
+    } catch {
+      if (!promptUnsupportedNotified) {
+        setCombatStatus('Dialog prompts are blocked in this browser. Using default combat selections.', 'info', 6500);
+        promptUnsupportedNotified = true;
+      }
+    }
+
+    return null;
+  }
 
   function loadState() {
     try {
@@ -523,11 +570,14 @@
           .filter(Boolean)
       : [];
 
+    const defenderUnitIds = normalizeUniqueStringList(value.defenderUnitIds);
+
     return {
       id: typeof value.id === 'string' && value.id ? value.id : `${spaceId}|${attackerNation}`,
       spaceId,
       attackerNation,
       attackerEntries,
+      defenderUnitIds,
       roundsResolved: sanitizeInteger(value.roundsResolved, 0, 999, 0)
     };
   }
@@ -1103,6 +1153,12 @@
         spaceId,
         attackerNation,
         attackerEntries: [],
+        defenderUnitIds: getUnitsInSpace(spaceId)
+          .filter((unit) => {
+            const nation = getUnitNation(unit);
+            return nation && nation !== attackerNation;
+          })
+          .map((unit) => unit.id),
         roundsResolved: 0
       };
       state.pendingCombats.push(pendingCombat);
@@ -1118,6 +1174,18 @@
       }
     }
 
+    if (!Array.isArray(pendingCombat.defenderUnitIds)) {
+      pendingCombat.defenderUnitIds = [];
+    }
+    if (!pendingCombat.defenderUnitIds.length) {
+      pendingCombat.defenderUnitIds = getUnitsInSpace(spaceId)
+        .filter((unit) => {
+          const nation = getUnitNation(unit);
+          return nation && nation !== attackerNation;
+        })
+        .map((unit) => unit.id);
+    }
+
     return pendingCombat;
   }
 
@@ -1127,10 +1195,14 @@
         const filteredEntries = combat.attackerEntries.filter((entry) =>
           state.units.some((unit) => unit.id === entry.unitId && unit.spaceId === combat.spaceId)
         );
+        const filteredDefenders = (Array.isArray(combat.defenderUnitIds) ? combat.defenderUnitIds : []).filter((unitId) =>
+          state.units.some((unit) => unit.id === unitId && unit.spaceId === combat.spaceId)
+        );
 
         return {
           ...combat,
-          attackerEntries: filteredEntries
+          attackerEntries: filteredEntries,
+          defenderUnitIds: filteredDefenders
         };
       })
       .filter((combat) => {
@@ -1276,7 +1348,7 @@
         })
         .join('\n');
 
-      const choice = window.prompt(
+      const choice = promptWithFallback(
         `${sideLabel} remove ${i + 1} of ${lossCount}. Enter option number:\n${optionsText}`,
         '1'
       );
@@ -1305,7 +1377,10 @@
     state.pendingCombats = state.pendingCombats
       .map((combat) => ({
         ...combat,
-        attackerEntries: combat.attackerEntries.filter((entry) => !removed.has(entry.unitId))
+        attackerEntries: combat.attackerEntries.filter((entry) => !removed.has(entry.unitId)),
+        defenderUnitIds: (Array.isArray(combat.defenderUnitIds) ? combat.defenderUnitIds : []).filter(
+          (unitId) => !removed.has(unitId)
+        )
       }))
       .filter((combat) => combat.attackerEntries.length > 0);
     syncUnitCounts();
@@ -1363,7 +1438,7 @@
       const optionsText = retreatOptions
         .map((space, index) => `${index + 1}: ${space.index} ${space.name}`)
         .join('\n');
-      const choice = window.prompt(
+      const choice = promptWithFallback(
         `Choose retreat destination for ${attackerNation} (or cancel to stay in first retreat space):\n${optionsText}`,
         '1'
       );
@@ -1378,17 +1453,67 @@
     state.retreatedUnitIds = Array.from(retreatedSet);
   }
 
-  function resolveCombatRound(spaceId, attackerNation) {
-    const space = spacesById.get(spaceId);
-    if (!space) {
-      return { attackerStillPresent: false, defendersStillPresent: false };
+  function resolveCombatRound(pendingCombat) {
+    if (!pendingCombat) {
+      return {
+        resolved: false,
+        reason: 'missing-combat',
+        message: 'No pending combat was found for this space.',
+        attackerStillPresent: false,
+        defendersStillPresent: false
+      };
     }
 
-    const attackerUnits = getUnitsInSpace(spaceId).filter((unit) => getUnitNation(unit) === attackerNation);
-    const defenderUnits = getUnitsInSpace(spaceId).filter((unit) => getUnitNation(unit) && getUnitNation(unit) !== attackerNation);
+    const { spaceId, attackerNation } = pendingCombat;
+    const space = spacesById.get(spaceId);
+    if (!space) {
+      return {
+        resolved: false,
+        reason: 'missing-space',
+        message: 'Combat could not resolve because the target space is invalid.',
+        attackerStillPresent: false,
+        defendersStillPresent: false
+      };
+    }
+
+    const attackerUnitIds = pendingCombat.attackerEntries
+      .map((entry) => entry.unitId)
+      .filter((unitId, index, ids) => unitId && ids.indexOf(unitId) === index);
+    let attackerUnits = attackerUnitIds
+      .map((unitId) => state.units.find((unit) => unit.id === unitId))
+      .filter(
+        (unit) =>
+          unit &&
+          unit.spaceId === spaceId &&
+          getUnitNation(unit) === attackerNation
+      );
+
+    if (!attackerUnits.length) {
+      attackerUnits = getUnitsInSpace(spaceId).filter((unit) => getUnitNation(unit) === attackerNation);
+    }
+
+    const defenderIds = Array.isArray(pendingCombat.defenderUnitIds) ? pendingCombat.defenderUnitIds : [];
+    let defenderUnits = defenderIds
+      .map((unitId) => state.units.find((unit) => unit.id === unitId))
+      .filter(
+        (unit) =>
+          unit &&
+          unit.spaceId === spaceId &&
+          getUnitNation(unit) &&
+          getUnitNation(unit) !== attackerNation
+      );
+
+    if (!defenderUnits.length) {
+      defenderUnits = getUnitsInSpace(spaceId).filter(
+        (unit) => getUnitNation(unit) && getUnitNation(unit) !== attackerNation
+      );
+    }
 
     if (!attackerUnits.length || !defenderUnits.length) {
       return {
+        resolved: false,
+        reason: 'missing-combatants',
+        message: 'Combat could not resolve because one side has no valid units in this space.',
         attackerStillPresent: attackerUnits.length > 0,
         defendersStillPresent: defenderUnits.length > 0
       };
@@ -1412,13 +1537,21 @@
     combatDisplayBySpaceId.set(spaceId, {
       attackerNation,
       defenderNation,
+      attackerUnitIds: attackerDice.map((die) => die.unitId),
+      defenderUnitIds: defenderDice.map((die) => die.unitId),
       attackerDice: attackerDice.map((die) => die.value),
       defenderDice: defenderDice.map((die) => die.value),
       attackerLosses: roundLosses.attackerLosses,
       defenderLosses: roundLosses.defenderLosses
     });
 
-    return { attackerStillPresent, defendersStillPresent };
+    return {
+      resolved: true,
+      reason: 'resolved',
+      message: '',
+      attackerStillPresent,
+      defendersStillPresent
+    };
   }
 
   function withdrawPendingCombat(pendingCombat) {
@@ -1445,7 +1578,7 @@
     }
 
     const optionsText = nations.map((nation, index) => `${index + 1}: ${nation}`).join('\n');
-    const choice = window.prompt(`Choose attacker nation:\n${optionsText}`, '1');
+    const choice = promptWithFallback(`Choose attacker nation:\n${optionsText}`, '1');
     const parsed = Number.parseInt(String(choice || '1'), 10);
     const selectedIndex = Number.isFinite(parsed) ? parsed - 1 : 0;
     const attackerNation = nations[selectedIndex] || nations[0];
@@ -1459,14 +1592,32 @@
     }
 
     if (!pendingCombat) {
+      setCombatStatus('No combat can be resolved here. Move attackers into an enemy space first.', 'error');
       return;
     }
 
-    const result = resolveCombatRound(pendingCombat.spaceId, pendingCombat.attackerNation);
-    pendingCombat.roundsResolved += 1;
+    const result = resolveCombatRound(pendingCombat);
+    if (!result.resolved) {
+      cleanPendingCombats();
+      renderUnits();
+      saveState();
+      if (result.message) {
+        setCombatStatus(result.message, 'error');
+      }
+      return;
+    }
+
+    const pendingCombatIndex = state.pendingCombats.findIndex((combat) => combat.id === pendingCombat.id);
+    if (pendingCombatIndex >= 0) {
+      state.pendingCombats[pendingCombatIndex].roundsResolved += 1;
+      pendingCombat = state.pendingCombats[pendingCombatIndex];
+    }
 
     if (!result.attackerStillPresent || !result.defendersStillPresent) {
       removePendingCombat(pendingCombat.id);
+      setCombatStatus('Combat resolved. One side no longer has units in this space.', 'success');
+    } else {
+      setCombatStatus('Combat round resolved. You may resolve another round or withdraw.', 'success');
     }
 
     cleanPendingCombats();
@@ -2466,6 +2617,7 @@
 
     const stackCounters = new Map();
     const stackSizes = new Map();
+    const renderedCenterByUnitId = new Map();
     const renderedEntries = [];
     const renderedEntryByStackKey = new Map();
 
@@ -2564,9 +2716,14 @@
 
       positionUnit(button, unit, stackIndex, stackSize);
 
+      const unitCenterX = Number.parseFloat(button.style.left);
+      const unitCenterY = Number.parseFloat(button.style.top);
+      renderedCenterByUnitId.set(unit.id, {
+        x: Number.isFinite(unitCenterX) ? unitCenterX : Math.round(unit.x * state.zoom),
+        y: Number.isFinite(unitCenterY) ? unitCenterY : Math.round(unit.y * state.zoom)
+      });
+
       if (showStartDebugDice) {
-        const unitCenterX = Number.parseFloat(button.style.left);
-        const unitCenterY = Number.parseFloat(button.style.top);
         const unitSize = UNIT_SIZE_PX * state.zoom;
         const dieSize = DIE_SIZE_PX * state.zoom;
         const gap = DIE_LEFT_MARGIN_PX * state.zoom;
@@ -2625,43 +2782,67 @@
       mapCanvas.appendChild(button);
     });
 
+    const getAnchorForCombatSide = (space, unitIds, role) => {
+      const unitPoints = (Array.isArray(unitIds) ? unitIds : [])
+        .map((unitId) => renderedCenterByUnitId.get(unitId))
+        .filter(Boolean);
+
+      const fallbackX = Math.round(toBoardX(space.centroidX) * state.zoom);
+      const fallbackY = Math.round(toBoardY(space.centroidY) * state.zoom);
+      const margin = Math.max(4, Math.round(DIE_LEFT_MARGIN_PX * state.zoom) + 2);
+
+      if (!unitPoints.length) {
+        return {
+          x: role === 'attacker'
+            ? fallbackX - Math.round(UNIT_SIZE_PX * state.zoom * 0.7)
+            : fallbackX + Math.round(UNIT_SIZE_PX * state.zoom * 0.7),
+          y: fallbackY
+        };
+      }
+
+      const minX = Math.min(...unitPoints.map((point) => point.x));
+      const maxX = Math.max(...unitPoints.map((point) => point.x));
+      const avgY = Math.round(unitPoints.reduce((sum, point) => sum + point.y, 0) / unitPoints.length);
+
+      return {
+        x: role === 'attacker' ? minX - margin : maxX + margin,
+        y: avgY
+      };
+    };
+
     Array.from(combatDisplayBySpaceId.entries()).forEach(([spaceId, diceDisplay]) => {
       const space = spacesById.get(spaceId);
       if (!space) {
         return;
       }
 
-      const centerY = Math.round(toBoardY(space.centroidY) * state.zoom);
-      const anchorX = Math.round(toBoardX(space.centroidX) * state.zoom - UNIT_SIZE_PX * state.zoom * 0.9);
-
-      const panel = document.createElement('div');
-      panel.className = 'combat-dice-panel';
-      panel.style.left = `${anchorX}px`;
-      panel.style.top = `${centerY}px`;
+      const attackerAnchor = getAnchorForCombatSide(space, diceDisplay.attackerUnitIds, 'attacker');
+      const attackerPanel = document.createElement('div');
+      attackerPanel.className = 'combat-dice-panel attacker-side';
+      attackerPanel.style.left = `${attackerAnchor.x}px`;
+      attackerPanel.style.top = `${attackerAnchor.y}px`;
 
       const attackerRow = document.createElement('div');
       attackerRow.className = 'combat-dice-row attacker';
-      const attackerLabel = document.createElement('div');
-      attackerLabel.className = 'combat-dice-label';
-      attackerLabel.textContent = `${diceDisplay.attackerNation} (A)`;
-      attackerRow.appendChild(attackerLabel);
       diceDisplay.attackerDice.forEach((value) => {
         attackerRow.appendChild(createCombatDieElement(value, 'attacker'));
       });
+      attackerPanel.appendChild(attackerRow);
+      mapCanvas.appendChild(attackerPanel);
+
+      const defenderAnchor = getAnchorForCombatSide(space, diceDisplay.defenderUnitIds, 'defender');
+      const defenderPanel = document.createElement('div');
+      defenderPanel.className = 'combat-dice-panel defender-side';
+      defenderPanel.style.left = `${defenderAnchor.x}px`;
+      defenderPanel.style.top = `${defenderAnchor.y}px`;
 
       const defenderRow = document.createElement('div');
       defenderRow.className = 'combat-dice-row defender';
-      const defenderLabel = document.createElement('div');
-      defenderLabel.className = 'combat-dice-label';
-      defenderLabel.textContent = `${diceDisplay.defenderNation} (D)`;
-      defenderRow.appendChild(defenderLabel);
       diceDisplay.defenderDice.forEach((value) => {
         defenderRow.appendChild(createCombatDieElement(value, 'defender'));
       });
-
-      panel.appendChild(attackerRow);
-      panel.appendChild(defenderRow);
-      mapCanvas.appendChild(panel);
+      defenderPanel.appendChild(defenderRow);
+      mapCanvas.appendChild(defenderPanel);
     });
 
     const combatButtonSpaces = detectedSpaces.filter((space) => isSpaceContestable(space.id));

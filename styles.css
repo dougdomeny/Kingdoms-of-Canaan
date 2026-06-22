@@ -77,6 +77,37 @@ main {
   font-family: Consolas, "Courier New", monospace;
 }
 
+#combat-status {
+  min-height: 1.4rem;
+  min-width: 16rem;
+  max-width: 32rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.35rem;
+  border: 1px solid transparent;
+  font-size: 0.84rem;
+  line-height: 1.25;
+  color: #5c4a37;
+  background: rgba(255, 245, 210, 0.55);
+}
+
+#combat-status.is-info {
+  color: #2b2118;
+  border-color: #8d7758;
+  background: rgba(255, 245, 210, 0.75);
+}
+
+#combat-status.is-success {
+  color: #19340f;
+  border-color: #3f6a2a;
+  background: rgba(201, 234, 176, 0.8);
+}
+
+#combat-status.is-error {
+  color: #4b1818;
+  border-color: #8e2f2f;
+  background: rgba(241, 190, 190, 0.82);
+}
+
 #reset-game {
   border: 1px solid #6a573e;
   border-radius: 0.35rem;
@@ -255,11 +286,18 @@ main {
 
 .combat-dice-panel {
   position: absolute;
-  transform: translate(-100%, -50%);
   display: grid;
   gap: 0.25rem;
   z-index: 19;
   pointer-events: none;
+}
+
+.combat-dice-panel.attacker-side {
+  transform: translate(-100%, -50%);
+}
+
+.combat-dice-panel.defender-side {
+  transform: translate(0, -50%);
 }
 
 .combat-dice-row {
