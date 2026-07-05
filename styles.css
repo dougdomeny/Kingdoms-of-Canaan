@@ -47,7 +47,15 @@ main {
   background: rgba(255, 245, 210, 0.7);
 }
 
+.turn-status-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+
 #current-turn,
+#current-nation,
 #current-phase {
   font-weight: 700;
 }
@@ -106,6 +114,52 @@ main {
   color: #4b1818;
   border-color: #8e2f2f;
   background: rgba(241, 190, 190, 0.82);
+}
+
+.combat-notice-overlay {
+  position: fixed;
+  inset: 0;
+  background: transparent;
+  z-index: 200;
+  pointer-events: none;
+}
+
+.combat-notice-overlay.hidden {
+  display: none;
+}
+
+.combat-notice-dialog {
+  position: fixed;
+  max-width: 28rem;
+  min-width: 16rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid #6a573e;
+  border-radius: 0.45rem;
+  background: #f7edd1;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+  pointer-events: auto;
+}
+
+.combat-notice-message {
+  margin: 0 0 0.8rem;
+  font-size: 0.9rem;
+  color: #2b2118;
+  line-height: 1.35;
+}
+
+.combat-notice-ok {
+  border: 1px solid #3f4d25;
+  border-radius: 0.35rem;
+  background: #d5e0b2;
+  color: #233014;
+  font-size: 0.86rem;
+  font-weight: 700;
+  padding: 0.3rem 0.9rem;
+  cursor: pointer;
+}
+
+.combat-notice-ok:hover {
+  background: #c2d199;
 }
 
 #reset-game {
@@ -290,13 +344,6 @@ main {
   gap: 0.25rem;
   z-index: 19;
   pointer-events: none;
-}
-
-.combat-dice-panel.attacker-side {
-  transform: translate(-100%, -50%);
-}
-
-.combat-dice-panel.defender-side {
   transform: translate(0, -50%);
 }
 
@@ -323,6 +370,20 @@ main {
   grid-template-rows: repeat(3, 1fr);
   align-items: center;
   justify-items: center;
+}
+
+.combat-die-value {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(0.12in * var(--map-zoom));
+  font-weight: 800;
+}
+
+.combat-die-value-seven {
+  font-size: calc(0.36in * var(--map-zoom));
 }
 
 .combat-die.attacker {

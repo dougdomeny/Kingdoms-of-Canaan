@@ -1,5 +1,6 @@
 (() => {
   const STORAGE_KEY = 'koc.gameState.v1';
+  const RESET_SCROLL_RIGHT_KEY = 'koc.resetScrollRight';
   const BASE_WIDTH = 1035;
   const BASE_HEIGHT = 1590;
   const UNIT_SIZE_PX = 72;
@@ -23,10 +24,29 @@
   const currentPhaseLabel = document.getElementById('current-phase');
   const phaseHelpLabel = document.getElementById('phase-help');
   const nextPhaseButton = document.getElementById('next-phase');
+  const currentNationLabel = document.getElementById('current-nation');
   const resetGameButton = document.getElementById('reset-game');
   const combatStatusLabel = document.getElementById('combat-status');
 
   const TOTAL_TURNS = 9;
+  const NATION_ORDER = [
+    { label: 'Hebrew',      nations: new Set(['Hebrew']) },
+    { label: 'Israelite',   nations: new Set(['Israel']) },
+    { label: 'Judah',       nations: new Set(['Judah']) },
+    { label: 'Amorite',     nations: new Set(['Amorite']) },
+    { label: 'Canaanite',   nations: new Set(['Canaan']) },
+    { label: 'Ammonite',    nations: new Set(['Ammon']) },
+    { label: 'Moabite',     nations: new Set(['Moab']) },
+    { label: 'Edomite',     nations: new Set(['Edom']) },
+    { label: 'Phoenician',  nations: new Set(['Phoenicia']) },
+    { label: 'Philistine',  nations: new Set(['Philistia']) },
+    { label: 'Egyptian',    nations: new Set(['Egypt']) },
+    { label: 'Aram-Syrian', nations: new Set(['Aram-Syria']) },
+    { label: 'Samaritan',   nations: new Set(['Samaria']) },
+    { label: 'Assyrian',    nations: new Set(['Assyria', 'Assyrria']) },
+    { label: 'Babylonian',  nations: new Set(['Babylonia']) }
+  ];
+
   const PHASES = [
     {
       id: 'growth',
@@ -291,6 +311,7 @@
     scrollTop: 0,
     currentTurn: 1,
     currentPhaseIndex: 0,
+      currentNationIndex: 0,
     spawnedLeaderTurns: [],
     spawnedReinforcementTurns: [],
     pendingEntryCombatUnitIds: [],
@@ -367,11 +388,91 @@
   let sourceMapWidth = 1035;
   let sourceMapHeight = 1590;
 
+  const shouldResetScrollRight = sessionStorage.getItem(RESET_SCROLL_RIGHT_KEY) === '1';
+  if (shouldResetScrollRight) {
+    sessionStorage.removeItem(RESET_SCROLL_RIGHT_KEY);
+  }
+
   const state = loadState();
   let dragState = null;
   const combatDisplayBySpaceId = new Map();
   let combatStatusTimeoutId = 0;
   let promptUnsupportedNotified = false;
+  let pendingCombatNoticeOnOk = null;
+
+  const combatNoticeOverlay = document.createElement('div');
+  combatNoticeOverlay.className = 'combat-notice-overlay hidden';
+  combatNoticeOverlay.setAttribute('role', 'dialog');
+  combatNoticeOverlay.setAttribute('aria-modal', 'true');
+
+  const combatNoticeDialog = document.createElement('div');
+  combatNoticeDialog.className = 'combat-notice-dialog';
+
+  const combatNoticeMessage = document.createElement('p');
+  combatNoticeMessage.className = 'combat-notice-message';
+
+  const combatNoticeOkButton = document.createElement('button');
+  combatNoticeOkButton.type = 'button';
+  combatNoticeOkButton.className = 'combat-notice-ok';
+  combatNoticeOkButton.textContent = 'OK';
+
+  combatNoticeDialog.appendChild(combatNoticeMessage);
+  combatNoticeDialog.appendChild(combatNoticeOkButton);
+  combatNoticeOverlay.appendChild(combatNoticeDialog);
+  document.body.appendChild(combatNoticeOverlay);
+
+  function hideCombatNotice() {
+    combatNoticeOverlay.classList.add('hidden');
+    combatNoticeDialog.style.left = '';
+    combatNoticeDialog.style.top = '';
+    const onOk = pendingCombatNoticeOnOk;
+    pendingCombatNoticeOnOk = null;
+    if (typeof onOk === 'function') {
+      onOk();
+    }
+  }
+
+  function showCombatNotice(message, onOk, spaceId = '') {
+    combatNoticeMessage.textContent = String(message || '').trim() || 'Units were removed.';
+    pendingCombatNoticeOnOk = typeof onOk === 'function' ? onOk : null;
+
+    const space = spaceId ? spacesById.get(spaceId) : null;
+    if (space) {
+      const mapBounds = mapCanvas.getBoundingClientRect();
+      const spaceX = Math.round(toBoardX(space.centroidX) * state.zoom);
+      const spaceY = Math.round(toBoardY(space.centroidY) * state.zoom);
+      const viewportX = mapBounds.left + spaceX - mapViewport.scrollLeft;
+      const viewportY = mapBounds.top + spaceY - mapViewport.scrollTop;
+      const unitSizePx = UNIT_SIZE_PX * state.zoom;
+      const dialogWidth = Math.min(448, Math.max(256, Math.round(window.innerWidth * 0.75)));
+      const left = Math.max(12, Math.min(window.innerWidth - dialogWidth - 12, Math.round(viewportX - dialogWidth / 2)));
+      const top = Math.max(12, Math.min(window.innerHeight - 140, Math.round(viewportY + unitSizePx * 1.4)));
+
+      combatNoticeDialog.style.left = `${left}px`;
+      combatNoticeDialog.style.top = `${top}px`;
+    }
+
+    combatNoticeOverlay.classList.remove('hidden');
+    combatNoticeOkButton.focus();
+  }
+
+  combatNoticeOkButton.addEventListener('click', hideCombatNotice);
+  combatNoticeOverlay.addEventListener('click', (event) => {
+    if (event.target === combatNoticeOverlay) {
+      hideCombatNotice();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (combatNoticeOverlay.classList.contains('hidden')) {
+      return;
+    }
+
+    if (event.key === 'Escape' || event.key === 'Enter') {
+      event.preventDefault();
+      hideCombatNotice();
+    }
+  });
 
   function setCombatStatus(message, type = 'info', autoHideMs = 5000) {
     if (!combatStatusLabel) {
@@ -459,6 +560,12 @@
         PHASES.length - 1,
         defaultState.currentPhaseIndex
       );
+        const currentNationIndex = sanitizeInteger(
+          parsed.currentNationIndex,
+          0,
+          NATION_ORDER.length - 1,
+          defaultState.currentNationIndex
+        );
       const spawnedLeaderTurns = Array.isArray(parsed.spawnedLeaderTurns)
         ? Array.from(
             new Set(
@@ -511,6 +618,7 @@
         scrollTop: sanitizeNumber(parsed.scrollTop, 0, BASE_HEIGHT * zoom, 0),
         currentTurn,
         currentPhaseIndex,
+          currentNationIndex,
         spawnedLeaderTurns,
         spawnedReinforcementTurns,
         pendingEntryCombatUnitIds,
@@ -749,6 +857,18 @@
     return PHASES[state.currentPhaseIndex] || PHASES[0];
   }
 
+  function getActiveNationEntry() {
+    return NATION_ORDER[state.currentNationIndex] || NATION_ORDER[0];
+  }
+
+  function isNationActive(nationName) {
+    if (!nationName) {
+      return false;
+    }
+
+    return getActiveNationEntry().nations.has(nationName);
+  }
+
   function canInteractWithUnit(unit) {
     if (state.gameComplete) {
       return false;
@@ -761,6 +881,10 @@
 
     const unitType = unitTypeById.get(unit.unitTypeId);
     if (phase.id === 'growth' && !isLeaderUnitType(unitType)) {
+      return false;
+    }
+
+    if (!isNationActive(getUnitNation(unit))) {
       return false;
     }
 
@@ -792,7 +916,14 @@
     }
 
     const unitType = unitTypeById.get(unit.unitTypeId);
-    return unitType ? unitType.nation : '';
+    if (!unitType) {
+      return '';
+    }
+    // Hittite units are synonymous with Canaanite units
+    if (unitType.nation === 'Hittite') {
+      return 'Canaan';
+    }
+    return unitType.nation;
   }
 
   function getSpaceBaseName(space) {
@@ -985,13 +1116,25 @@
         : phase.helpText;
     }
 
+    const currentNation = NATION_ORDER[state.currentNationIndex] || NATION_ORDER[0];
+    if (currentNationLabel) {
+      currentNationLabel.textContent = currentNation.label;
+    }
+
+    const isLastNationLastTurn =
+      state.currentTurn === TOTAL_TURNS &&
+      state.currentNationIndex === NATION_ORDER.length - 1 &&
+      phase.id === 'end';
+
     if (nextPhaseButton) {
       nextPhaseButton.disabled = state.gameComplete;
       nextPhaseButton.textContent = state.gameComplete
         ? 'Game Complete'
-        : state.currentTurn === TOTAL_TURNS && phase.id === 'end'
+        : isLastNationLastTurn
           ? 'Finish Game'
-          : phase.nextLabel;
+          : phase.id === 'end'
+            ? `Advance to ${NATION_ORDER[(state.currentNationIndex + 1) % NATION_ORDER.length].label} Turn`
+            : phase.nextLabel;
     }
   }
 
@@ -1088,6 +1231,7 @@
     die.style.height = `${dieSizePx}px`;
 
     const activePips = new Set(getDiePipIndices(value));
+    const showNumericValue = Number.isFinite(value) && value > 6;
     const pipColor = role === 'attacker' ? '#ffffff' : '#444444';
     const pipSizePx = Math.max(3, Math.round(dieSizePx * 0.18));
     for (let i = 0; i < 9; i += 1) {
@@ -1102,6 +1246,16 @@
       die.appendChild(pip);
     }
 
+    if (showNumericValue) {
+      const valueLabel = document.createElement('span');
+      valueLabel.className = 'combat-die-value';
+      valueLabel.textContent = String(value);
+      if (value === 7) {
+        valueLabel.classList.add('combat-die-value-seven');
+      }
+      die.appendChild(valueLabel);
+    }
+
     return die;
   }
 
@@ -1111,6 +1265,14 @@
     }
 
     return state.vassalByNation[firstNation] === secondNation || state.vassalByNation[secondNation] === firstNation;
+  }
+
+  function nationsAreHostile(firstNation, secondNation) {
+    if (!firstNation || !secondNation || firstNation === secondNation) {
+      return false;
+    }
+
+    return !nationsAreSubmittedTogether(firstNation, secondNation);
   }
 
   function isSpaceContestable(spaceId) {
@@ -1156,7 +1318,7 @@
         defenderUnitIds: getUnitsInSpace(spaceId)
           .filter((unit) => {
             const nation = getUnitNation(unit);
-            return nation && nation !== attackerNation;
+            return nationsAreHostile(attackerNation, nation);
           })
           .map((unit) => unit.id),
         roundsResolved: 0
@@ -1181,7 +1343,7 @@
       pendingCombat.defenderUnitIds = getUnitsInSpace(spaceId)
         .filter((unit) => {
           const nation = getUnitNation(unit);
-          return nation && nation !== attackerNation;
+          return nationsAreHostile(attackerNation, nation);
         })
         .map((unit) => unit.id);
     }
@@ -1209,7 +1371,7 @@
         const attackerPresent = getUnitsInSpace(combat.spaceId).some((unit) => getUnitNation(unit) === combat.attackerNation);
         const defenderPresent = getUnitsInSpace(combat.spaceId).some((unit) => {
           const nation = getUnitNation(unit);
-          return nation && nation !== combat.attackerNation;
+          return nationsAreHostile(combat.attackerNation, nation);
         });
         return attackerPresent && defenderPresent;
       });
@@ -1293,9 +1455,12 @@
       const baseRoll = Math.floor(Math.random() * 6) + 1;
       return {
         unitId: unit.id,
+        unitName: unitType ? unitType.displayName : unit.label,
         value: clampCombatDie(baseRoll + getTerrainCombatModifier(unitType, space))
       };
     });
+
+    let leaderEffect = null;
 
     const hasLeader = units.some((unit) => {
       const unitType = unitTypeById.get(unit.unitTypeId);
@@ -1309,10 +1474,49 @@
           highestIndex = i;
         }
       }
-      dice[highestIndex].value = clampCombatDie(dice[highestIndex].value + 1);
+      const boostedDie = dice[highestIndex];
+      const before = boostedDie.value;
+      const after = before + 1;
+      boostedDie.value = after;
+      leaderEffect = {
+        unitId: boostedDie.unitId,
+        unitName: boostedDie.unitName,
+        before,
+        after
+      };
     }
 
-    return dice.sort((first, second) => second.value - first.value);
+    const sortedDice = dice.sort((first, second) => second.value - first.value);
+    sortedDice.leaderEffect = leaderEffect;
+    return sortedDice;
+  }
+
+  function formatLeaderEffectMessage(sideLabel, leaderEffect) {
+    if (!leaderEffect) {
+      return '';
+    }
+
+    return `${sideLabel} leader bonus applied to ${leaderEffect.unitName}: ${leaderEffect.before} to ${leaderEffect.after}.`;
+  }
+
+  function formatGroupedDice(values) {
+    if (!Array.isArray(values) || !values.length) {
+      return '';
+    }
+
+    const counts = new Map();
+    values.forEach((value) => {
+      const die = Number.isFinite(value) ? Math.round(value) : 0;
+      if (die <= 0) {
+        return;
+      }
+      counts.set(die, (counts.get(die) || 0) + 1);
+    });
+
+    return Array.from(counts.entries())
+      .sort((first, second) => second[0] - first[0])
+      .map(([die, count]) => `${die}x${count}`)
+      .join(' ');
   }
 
   function resolveCombatDiceMatchups(attackerDice, defenderDice) {
@@ -1334,6 +1538,10 @@
   function chooseCasualtyUnitIds(units, lossCount, sideLabel) {
     if (!lossCount || !units.length) {
       return [];
+    }
+
+    if (lossCount >= units.length) {
+      return units.map((unit) => unit.id);
     }
 
     const available = [...units];
@@ -1459,6 +1667,8 @@
         resolved: false,
         reason: 'missing-combat',
         message: 'No pending combat was found for this space.',
+        casualtiesRemoved: 0,
+        casualtyMessage: '',
         attackerStillPresent: false,
         defendersStillPresent: false
       };
@@ -1471,6 +1681,8 @@
         resolved: false,
         reason: 'missing-space',
         message: 'Combat could not resolve because the target space is invalid.',
+        casualtiesRemoved: 0,
+        casualtyMessage: '',
         attackerStillPresent: false,
         defendersStillPresent: false
       };
@@ -1514,18 +1726,65 @@
         resolved: false,
         reason: 'missing-combatants',
         message: 'Combat could not resolve because one side has no valid units in this space.',
+        casualtiesRemoved: 0,
+        casualtyMessage: '',
+        hiddenDiceMessage: '',
         attackerStillPresent: attackerUnits.length > 0,
         defendersStillPresent: defenderUnits.length > 0
       };
     }
 
     const attackerDice = buildCombatDice(attackerUnits, space);
-    const defenderDice = buildCombatDice(defenderUnits, space);
     const defenderNation = getDefenderNationName(attackerNation, defenderUnits);
+
+    if (canDefenderSubmit(defenderNation, attackerNation)) {
+      const shouldSubmit = window.confirm(
+        `${defenderNation} may submit to ${attackerNation}. Submit now and become a vassal?`
+      );
+
+      if (shouldSubmit) {
+        applySubmission(defenderNation, attackerNation);
+        combatDisplayBySpaceId.delete(spaceId);
+        removePendingCombat(pendingCombat.id);
+        return {
+          resolved: true,
+          reason: 'submission',
+          message: `${defenderNation} submitted to ${attackerNation}.`,
+          casualtiesRemoved: 0,
+          casualtyMessage: '',
+          hiddenDiceMessage: '',
+          attackerStillPresent: true,
+          defendersStillPresent: true
+        };
+      }
+    }
+
+    const defenderDice = buildCombatDice(defenderUnits, space);
     const roundLosses = resolveCombatDiceMatchups(attackerDice, defenderDice);
+    const displayDiceCount = Math.min(attackerDice.length, defenderDice.length);
+    const hiddenAttackerDice = attackerDice.slice(displayDiceCount).map((die) => die.value);
+    const hiddenDefenderDice = defenderDice.slice(displayDiceCount).map((die) => die.value);
+    const hiddenAttackerText = formatGroupedDice(hiddenAttackerDice);
+    const hiddenDefenderText = formatGroupedDice(hiddenDefenderDice);
+    const hiddenDiceMessage = [
+      hiddenAttackerText ? `${attackerNation} hidden dice: ${hiddenAttackerText}.` : '',
+      hiddenDefenderText ? `${defenderNation} hidden dice: ${hiddenDefenderText}.` : ''
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+    const leaderEffectMessages = [
+      formatLeaderEffectMessage(attackerNation, attackerDice.leaderEffect),
+      formatLeaderEffectMessage(defenderNation, defenderDice.leaderEffect)
+    ].filter(Boolean);
 
     const attackerCasualties = chooseCasualtyUnitIds(attackerUnits, roundLosses.attackerLosses, `${attackerNation} (attacker)`);
-    const defenderCasualties = chooseCasualtyUnitIds(defenderUnits, roundLosses.defenderLosses, 'Defender');
+    const defenderCasualties = chooseCasualtyUnitIds(
+      defenderUnits,
+      roundLosses.defenderLosses,
+      `${defenderNation} (defender)`
+    );
+    const casualtiesRemoved = attackerCasualties.length + defenderCasualties.length;
     removeUnitsById([...attackerCasualties, ...defenderCasualties]);
 
     const attackerStillPresent = getUnitsInSpace(spaceId).some((unit) => getUnitNation(unit) === attackerNation);
@@ -1537,10 +1796,10 @@
     combatDisplayBySpaceId.set(spaceId, {
       attackerNation,
       defenderNation,
-      attackerUnitIds: attackerDice.map((die) => die.unitId),
-      defenderUnitIds: defenderDice.map((die) => die.unitId),
-      attackerDice: attackerDice.map((die) => die.value),
-      defenderDice: defenderDice.map((die) => die.value),
+      attackerUnitIds: attackerDice.slice(0, displayDiceCount).map((die) => die.unitId),
+      defenderUnitIds: defenderDice.slice(0, displayDiceCount).map((die) => die.unitId),
+      attackerDice: attackerDice.slice(0, displayDiceCount).map((die) => die.value),
+      defenderDice: defenderDice.slice(0, displayDiceCount).map((die) => die.value),
       attackerLosses: roundLosses.attackerLosses,
       defenderLosses: roundLosses.defenderLosses
     });
@@ -1549,6 +1808,20 @@
       resolved: true,
       reason: 'resolved',
       message: '',
+      casualtiesRemoved,
+      hiddenDiceMessage,
+      casualtyMessage: casualtiesRemoved
+        ? [
+            `${casualtiesRemoved} unit${casualtiesRemoved === 1 ? '' : 's'} removed (${attackerNation} lost ${attackerCasualties.length}, ${defenderNation} lost ${defenderCasualties.length}).`,
+            ...leaderEffectMessages,
+            hiddenDiceMessage
+          ].join(' ')
+        : [
+            ...leaderEffectMessages,
+            hiddenDiceMessage
+          ]
+            .filter(Boolean)
+            .join(' '),
       attackerStillPresent,
       defendersStillPresent
     };
@@ -1577,11 +1850,12 @@
       return null;
     }
 
-    const optionsText = nations.map((nation, index) => `${index + 1}: ${nation}`).join('\n');
-    const choice = promptWithFallback(`Choose attacker nation:\n${optionsText}`, '1');
-    const parsed = Number.parseInt(String(choice || '1'), 10);
-    const selectedIndex = Number.isFinite(parsed) ? parsed - 1 : 0;
-    const attackerNation = nations[selectedIndex] || nations[0];
+    const activeNations = nations.filter((nation) => isNationActive(nation));
+    if (!activeNations.length) {
+      return null;
+    }
+
+    const attackerNation = activeNations[0];
     return ensurePendingCombat(spaceId, attackerNation, null);
   }
 
@@ -1596,6 +1870,11 @@
       return;
     }
 
+    if (!isNationActive(pendingCombat.attackerNation)) {
+      setCombatStatus(`${getActiveNationEntry().label} is the active nation. Only its attacks can be resolved now.`, 'error');
+      return;
+    }
+
     const result = resolveCombatRound(pendingCombat);
     if (!result.resolved) {
       cleanPendingCombats();
@@ -1606,6 +1885,16 @@
       }
       return;
     }
+
+    if (result.reason === 'submission') {
+      cleanPendingCombats();
+      renderUnits();
+      saveState();
+      setCombatStatus(result.message || 'The defender submitted.', 'success');
+      return;
+    }
+
+    const resolvedCombatSpaceId = pendingCombat.spaceId;
 
     const pendingCombatIndex = state.pendingCombats.findIndex((combat) => combat.id === pendingCombat.id);
     if (pendingCombatIndex >= 0) {
@@ -1623,11 +1912,28 @@
     cleanPendingCombats();
     renderUnits();
     saveState();
+
+    if (result.casualtiesRemoved > 0 || result.hiddenDiceMessage) {
+      showCombatNotice(
+        result.casualtyMessage,
+        () => {
+          combatDisplayBySpaceId.delete(resolvedCombatSpaceId);
+          renderUnits();
+          saveState();
+        },
+        resolvedCombatSpaceId
+      );
+    }
   }
 
   function handleWithdrawClick(spaceId) {
     const pendingCombat = getPendingCombatForSpace(spaceId);
     if (!pendingCombat) {
+      return;
+    }
+
+    if (!isNationActive(pendingCombat.attackerNation)) {
+      setCombatStatus(`${getActiveNationEntry().label} is the active nation. Only its attacks can withdraw now.`, 'error');
       return;
     }
 
@@ -1935,7 +2241,7 @@
     });
 
     groupedBySpaceAndNation.forEach(({ spaceId, nation }) => {
-      const enemyPresent = getUnitsInSpace(spaceId).some((unit) => getUnitNation(unit) && getUnitNation(unit) !== nation);
+      const enemyPresent = getUnitsInSpace(spaceId).some((unit) => nationsAreHostile(nation, getUnitNation(unit)));
       if (enemyPresent) {
         ensurePendingCombat(spaceId, nation, null);
       }
@@ -1995,13 +2301,23 @@
       resolvePendingEntryCombatBeforeMovement();
     } else if (phase.id === 'action') {
       state.currentPhaseIndex = 2;
-    } else if (state.currentTurn >= TOTAL_TURNS) {
-      state.gameComplete = true;
     } else {
-      state.currentTurn += 1;
-      state.currentPhaseIndex = 0;
-      state.activatedUnitIds = [];
-      state.retreatedUnitIds = [];
+      // End phase complete: advance to next nation, or next turn if all nations done
+      const nextNationIndex = state.currentNationIndex + 1;
+      if (nextNationIndex < NATION_ORDER.length) {
+        state.currentNationIndex = nextNationIndex;
+        state.currentPhaseIndex = 0;
+        state.activatedUnitIds = [];
+        state.retreatedUnitIds = [];
+      } else if (state.currentTurn >= TOTAL_TURNS) {
+        state.gameComplete = true;
+      } else {
+        state.currentTurn += 1;
+        state.currentNationIndex = 0;
+        state.currentPhaseIndex = 0;
+        state.activatedUnitIds = [];
+        state.retreatedUnitIds = [];
+      }
     }
 
     syncTurnState();
@@ -2100,6 +2416,10 @@
     }
 
     const unitType = unitTypeById.get(unit.unitTypeId);
+    if (!isNationActive(getUnitNation(unit))) {
+      return false;
+    }
+
     if (isLeaderUnitType(unitType) && getCurrentPhase().id === 'growth') {
       return getEligibleLeaderEntrySpaces(unitType, unit.id).some((space) => space.id === targetSpace.id);
     }
@@ -2607,16 +2927,29 @@
     });
   }
 
+  function getUnitsMovedByDrag(unit, moveAllInStack) {
+    if (!unit || !moveAllInStack || !unit.spaceId) {
+      return unit ? [unit] : [];
+    }
+
+    const movingNation = getUnitNation(unit);
+    return state.units.filter(
+      (candidate) =>
+        candidate.spaceId === unit.spaceId &&
+        getUnitNation(candidate) === movingNation &&
+        canInteractWithUnit(candidate)
+    );
+  }
+
   function renderUnits() {
     mapCanvas.querySelectorAll('.unit').forEach((node) => node.remove());
     mapCanvas.querySelectorAll('.combat-action-button').forEach((node) => node.remove());
     mapCanvas.querySelectorAll('.combat-dice-panel').forEach((node) => node.remove());
     mapCanvas.querySelectorAll('.debug-start-die').forEach((node) => node.remove());
 
-    const showStartDebugDice = !state.gameComplete && state.currentTurn === 1 && getCurrentPhase().id === 'growth';
-
-    const stackCounters = new Map();
-    const stackSizes = new Map();
+    const regularStackCounters = new Map();
+    const regularStackSizes = new Map();
+    const regularStackPositionByGroupKey = new Map();
     const renderedCenterByUnitId = new Map();
     const renderedEntries = [];
     const renderedEntryByStackKey = new Map();
@@ -2629,14 +2962,17 @@
       }
 
       const nationKey = getUnitNation(unit) || unit.unitTypeId;
-      const stackKey = `${unit.spaceId}|${nationKey}`;
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      const stackKey = isLeaderUnitType(unitType)
+        ? `${unit.spaceId}|${nationKey}|leader|${unit.id}`
+        : `${unit.spaceId}|${nationKey}|regular`;
       const existingEntry = renderedEntryByStackKey.get(stackKey);
       if (existingEntry) {
         existingEntry.count += 1;
         return;
       }
 
-      const newEntry = { unit, count: 1 };
+      const newEntry = { unit, count: 1, nationKey };
       renderedEntryByStackKey.set(stackKey, newEntry);
       renderedEntries.push(newEntry);
     });
@@ -2665,11 +3001,14 @@
         return;
       }
 
-      stackSizes.set(unit.spaceId, (stackSizes.get(unit.spaceId) || 0) + 1);
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      if (!isLeaderUnitType(unitType)) {
+        regularStackSizes.set(unit.spaceId, (regularStackSizes.get(unit.spaceId) || 0) + 1);
+      }
     });
 
     renderedEntries.forEach((entry) => {
-      const { unit, count } = entry;
+      const { unit, count, nationKey } = entry;
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'unit';
@@ -2679,8 +3018,8 @@
 
       const unitType = unitTypeById.get(unit.unitTypeId);
   const isLeader = isLeaderUnitType(unitType);
-  button.classList.toggle('unit-leader', isLeader);
-  button.style.zIndex = isLeader ? '6' : '3';
+      button.classList.toggle('unit-leader', isLeader);
+      button.style.zIndex = isLeader ? '12' : '3';
       button.setAttribute('aria-label', unitType ? unitType.displayName : unit.label);
 
       if (unitType) {
@@ -2708,13 +3047,40 @@
       }
 
       const hasSpace = unit.spaceId && spacesById.has(unit.spaceId);
-      const stackIndex = hasSpace ? stackCounters.get(unit.spaceId) || 0 : 0;
-      const stackSize = hasSpace ? stackSizes.get(unit.spaceId) || 1 : 1;
+      const groupKey = hasSpace ? `${unit.spaceId}|${nationKey}` : '';
+      let stackIndex = 0;
+      let stackSize = 1;
+      const positionOptions = {
+        anchorFromRegularStack: false,
+        anchorStackIndex: 0,
+        anchorStackSize: 1
+      };
+
       if (hasSpace) {
-        stackCounters.set(unit.spaceId, stackIndex + 1);
+        if (isLeader) {
+          const anchorPosition = regularStackPositionByGroupKey.get(groupKey);
+          if (anchorPosition) {
+            positionOptions.anchorFromRegularStack = true;
+            positionOptions.anchorStackIndex = anchorPosition.index;
+            positionOptions.anchorStackSize = anchorPosition.size;
+          }
+        } else {
+          stackIndex = regularStackCounters.get(unit.spaceId) || 0;
+          stackSize = regularStackSizes.get(unit.spaceId) || 1;
+          regularStackCounters.set(unit.spaceId, stackIndex + 1);
+          regularStackPositionByGroupKey.set(groupKey, { index: stackIndex, size: stackSize });
+        }
       }
 
-      positionUnit(button, unit, stackIndex, stackSize);
+      const hasSameNationRegularUnit = Boolean(unit.spaceId) && getUnitsInSpace(unit.spaceId, unit.id).some((occupant) => {
+        const occupantType = unitTypeById.get(occupant.unitTypeId);
+        return getUnitNation(occupant) === getUnitNation(unit) && !isLeaderUnitType(occupantType);
+      });
+
+      positionUnit(button, unit, stackIndex, stackSize, {
+        ...positionOptions,
+        anchorFromRegularStack: hasSameNationRegularUnit && positionOptions.anchorFromRegularStack
+      });
 
       const unitCenterX = Number.parseFloat(button.style.left);
       const unitCenterY = Number.parseFloat(button.style.top);
@@ -2722,30 +3088,6 @@
         x: Number.isFinite(unitCenterX) ? unitCenterX : Math.round(unit.x * state.zoom),
         y: Number.isFinite(unitCenterY) ? unitCenterY : Math.round(unit.y * state.zoom)
       });
-
-      if (showStartDebugDice) {
-        const unitSize = UNIT_SIZE_PX * state.zoom;
-        const dieSize = DIE_SIZE_PX * state.zoom;
-        const gap = DIE_LEFT_MARGIN_PX * state.zoom;
-
-        // Red (attacker) die — immediately left of unit
-        const redValue = Math.floor(Math.random() * 6) + 1;
-        const redDie = createCombatDieElement(redValue, 'attacker');
-        redDie.classList.add('debug-start-die');
-        const redCenterX = unitCenterX - unitSize / 2 - gap - dieSize / 2;
-        redDie.style.left = `${Math.round(redCenterX)}px`;
-        redDie.style.top = `${Math.round(unitCenterY)}px`;
-        mapCanvas.appendChild(redDie);
-
-        // White (defender) die — immediately left of red die
-        const whiteValue = Math.floor(Math.random() * 6) + 1;
-        const whiteDie = createCombatDieElement(whiteValue, 'defender');
-        whiteDie.classList.add('debug-start-die');
-        const whiteCenterX = redCenterX - dieSize / 2 - gap - dieSize / 2;
-        whiteDie.style.left = `${Math.round(whiteCenterX)}px`;
-        whiteDie.style.top = `${Math.round(unitCenterY)}px`;
-        mapCanvas.appendChild(whiteDie);
-      }
 
       if (hasSpace) {
         const space = spacesById.get(unit.spaceId);
@@ -2757,11 +3099,11 @@
 
       if (unitLocked) {
         button.title = button.title
-          ? `${button.title} — movement disabled after game completion`
+          ? `${button.title} - movement disabled after game completion`
           : 'Movement disabled after game completion';
       } else if (unitType && isLeaderUnitType(unitType) && getCurrentPhase().id === 'growth') {
         button.title = button.title
-          ? `${button.title} — place on any space containing another ${unitType.nation} unit`
+          ? `${button.title} - place on any space containing another ${unitType.nation} unit`
           : `Place on any space containing another ${unitType.nation} unit`;
       }
 
@@ -2770,10 +3112,14 @@
           return;
         }
 
+        const draggedUnits = getUnitsMovedByDrag(unit, event.shiftKey);
+
         dragState = {
           pointerId: event.pointerId,
           unitId: unit.id,
-          element: button
+          element: button,
+          moveAllInStack: event.shiftKey,
+          movedUnitIds: draggedUnits.map((candidate) => candidate.id)
         };
         button.classList.add('dragging');
         button.setPointerCapture(event.pointerId);
@@ -2782,31 +3128,26 @@
       mapCanvas.appendChild(button);
     });
 
-    const getAnchorForCombatSide = (space, unitIds, role) => {
+    const getCombatRowMetrics = (space, unitIds) => {
       const unitPoints = (Array.isArray(unitIds) ? unitIds : [])
         .map((unitId) => renderedCenterByUnitId.get(unitId))
         .filter(Boolean);
 
       const fallbackX = Math.round(toBoardX(space.centroidX) * state.zoom);
       const fallbackY = Math.round(toBoardY(space.centroidY) * state.zoom);
-      const margin = Math.max(4, Math.round(DIE_LEFT_MARGIN_PX * state.zoom) + 2);
 
       if (!unitPoints.length) {
         return {
-          x: role === 'attacker'
-            ? fallbackX - Math.round(UNIT_SIZE_PX * state.zoom * 0.7)
-            : fallbackX + Math.round(UNIT_SIZE_PX * state.zoom * 0.7),
+          minX: fallbackX,
+          maxX: fallbackX,
           y: fallbackY
         };
       }
 
-      const minX = Math.min(...unitPoints.map((point) => point.x));
-      const maxX = Math.max(...unitPoints.map((point) => point.x));
-      const avgY = Math.round(unitPoints.reduce((sum, point) => sum + point.y, 0) / unitPoints.length);
-
       return {
-        x: role === 'attacker' ? minX - margin : maxX + margin,
-        y: avgY
+        minX: Math.min(...unitPoints.map((point) => point.x)),
+        maxX: Math.max(...unitPoints.map((point) => point.x)),
+        y: Math.round(unitPoints.reduce((sum, point) => sum + point.y, 0) / unitPoints.length)
       };
     };
 
@@ -2816,39 +3157,44 @@
         return;
       }
 
-      const attackerAnchor = getAnchorForCombatSide(space, diceDisplay.attackerUnitIds, 'attacker');
-      const attackerPanel = document.createElement('div');
-      attackerPanel.className = 'combat-dice-panel attacker-side';
-      attackerPanel.style.left = `${attackerAnchor.x}px`;
-      attackerPanel.style.top = `${attackerAnchor.y}px`;
+      const dieSizePx = Math.round(DIE_SIZE_PX * state.zoom);
+      const rowGapPx = Math.max(2, Math.round(0.16 * 16 * state.zoom));
+      const margin = Math.max(4, Math.round(DIE_LEFT_MARGIN_PX * state.zoom) + 2);
+      const attackerMetrics = getCombatRowMetrics(space, diceDisplay.attackerUnitIds);
+      const defenderMetrics = getCombatRowMetrics(space, diceDisplay.defenderUnitIds);
+      const widestRowCount = Math.max(diceDisplay.attackerDice.length, diceDisplay.defenderDice.length, 1);
+      const widestRowWidth = widestRowCount * dieSizePx + Math.max(0, widestRowCount - 1) * rowGapPx;
+      const alignedLeft = Math.min(attackerMetrics.minX, defenderMetrics.minX) - margin - widestRowWidth;
+      const panelCenterY = Math.round((attackerMetrics.y + defenderMetrics.y) / 2);
+
+      const combatPanel = document.createElement('div');
+      combatPanel.className = 'combat-dice-panel';
+      combatPanel.style.left = `${Math.round(alignedLeft)}px`;
+      combatPanel.style.top = `${panelCenterY}px`;
 
       const attackerRow = document.createElement('div');
       attackerRow.className = 'combat-dice-row attacker';
       diceDisplay.attackerDice.forEach((value) => {
         attackerRow.appendChild(createCombatDieElement(value, 'attacker'));
       });
-      attackerPanel.appendChild(attackerRow);
-      mapCanvas.appendChild(attackerPanel);
-
-      const defenderAnchor = getAnchorForCombatSide(space, diceDisplay.defenderUnitIds, 'defender');
-      const defenderPanel = document.createElement('div');
-      defenderPanel.className = 'combat-dice-panel defender-side';
-      defenderPanel.style.left = `${defenderAnchor.x}px`;
-      defenderPanel.style.top = `${defenderAnchor.y}px`;
+      combatPanel.appendChild(attackerRow);
 
       const defenderRow = document.createElement('div');
       defenderRow.className = 'combat-dice-row defender';
       diceDisplay.defenderDice.forEach((value) => {
         defenderRow.appendChild(createCombatDieElement(value, 'defender'));
       });
-      defenderPanel.appendChild(defenderRow);
-      mapCanvas.appendChild(defenderPanel);
+      combatPanel.appendChild(defenderRow);
+      mapCanvas.appendChild(combatPanel);
     });
 
     const combatButtonSpaces = detectedSpaces.filter((space) => isSpaceContestable(space.id));
     combatButtonSpaces.forEach((space) => {
       const pendingCombat = getPendingCombatForSpace(space.id);
       const showWithdraw = Boolean(pendingCombat && pendingCombat.roundsResolved > 0);
+      const activeCombat = pendingCombat ? isNationActive(pendingCombat.attackerNation) : false;
+      const canResolveManualCombat = !pendingCombat && getUnitsInSpace(space.id).some((unit) => isNationActive(getUnitNation(unit)));
+      const combatEnabled = getCurrentPhase().id === 'action' && (activeCombat || canResolveManualCombat);
       const buttonY = Math.round(toBoardY(space.centroidY) * state.zoom);
       const buttonX = Math.round(toBoardX(space.centroidX) * state.zoom - UNIT_SIZE_PX * state.zoom * 0.9);
 
@@ -2856,6 +3202,7 @@
       resolveButton.type = 'button';
       resolveButton.className = 'combat-action-button';
       resolveButton.textContent = 'Resolve Combat';
+      resolveButton.disabled = !combatEnabled;
       resolveButton.style.left = `${buttonX}px`;
       resolveButton.style.top = `${buttonY}px`;
       resolveButton.addEventListener('click', () => handleResolveCombatClick(space.id));
@@ -2866,6 +3213,7 @@
         withdrawButton.type = 'button';
         withdrawButton.className = 'combat-action-button';
         withdrawButton.textContent = 'Withdraw';
+        withdrawButton.disabled = !activeCombat || getCurrentPhase().id !== 'action';
         withdrawButton.style.left = `${buttonX}px`;
         withdrawButton.style.top = `${buttonY + Math.round(24 * state.zoom)}px`;
         withdrawButton.addEventListener('click', () => handleWithdrawClick(space.id));
@@ -2874,7 +3222,7 @@
     });
   }
 
-  function positionUnit(element, unit, stackIndex, stackSize = 1) {
+  function positionUnit(element, unit, stackIndex, stackSize = 1, options = {}) {
     let baseX = unit.x;
     let baseY = unit.y;
 
@@ -2887,6 +3235,28 @@
     const offsetStep = (UNIT_SIZE_PX + STACK_VERTICAL_GAP_PX) * state.zoom;
     const centeredIndex = stackIndex - (stackSize - 1) / 2;
     const verticalOffset = centeredIndex * offsetStep;
+    const unitType = unitTypeById.get(unit.unitTypeId);
+    const unitSizePx = UNIT_SIZE_PX * state.zoom;
+
+    if (isLeaderUnitType(unitType) && options.anchorFromRegularStack) {
+      const anchorStackIndex = Number.isFinite(options.anchorStackIndex) ? options.anchorStackIndex : stackIndex;
+      const anchorStackSize = Number.isFinite(options.anchorStackSize) ? options.anchorStackSize : stackSize;
+      const regularCenteredIndex = anchorStackIndex - (anchorStackSize - 1) / 2;
+      const regularCenterX = baseX * state.zoom;
+      const regularCenterY = baseY * state.zoom + regularCenteredIndex * offsetStep;
+      const regularUpperRightX = regularCenterX + unitSizePx / 2;
+      const regularUpperRightY = regularCenterY - unitSizePx / 2;
+      const leaderOffsetPx = unitSizePx * 0.25;
+      const leaderTopLeftX = regularUpperRightX - unitSizePx + leaderOffsetPx;
+      const leaderTopLeftY = regularUpperRightY + leaderOffsetPx;
+      const leaderCenterX = leaderTopLeftX + unitSizePx / 2;
+      const leaderCenterY = leaderTopLeftY + unitSizePx / 2;
+
+      element.style.left = `${Math.round(leaderCenterX)}px`;
+      element.style.top = `${Math.round(leaderCenterY)}px`;
+      return;
+    }
+
     element.style.left = `${Math.round(baseX * state.zoom)}px`;
     element.style.top = `${Math.round(baseY * state.zoom + verticalOffset)}px`;
   }
@@ -2915,6 +3285,11 @@
 
     const unit = state.units.find((item) => item.id === dragState.unitId);
     if (unit) {
+      const movedUnits = Array.isArray(dragState.movedUnitIds) && dragState.movedUnitIds.length
+        ? dragState.movedUnitIds
+            .map((unitId) => state.units.find((item) => item.id === unitId))
+            .filter(Boolean)
+        : [unit];
       const bounds = mapCanvas.getBoundingClientRect();
       const boardX = sanitizeNumber((event.clientX - bounds.left) / state.zoom, 0, BASE_WIDTH, unit.x);
       const boardY = sanitizeNumber((event.clientY - bounds.top) / state.zoom, 0, BASE_HEIGHT, unit.y);
@@ -2922,23 +3297,25 @@
       if (detectedSpaces.length) {
         const targetSpace = findSpaceForBoardPoint(boardX, boardY);
         if (targetSpace && canUnitMoveToSpace(unit, targetSpace)) {
-          const originSpaceId = unit.spaceId;
+          const originSpaceByUnitId = new Map(movedUnits.map((candidate) => [candidate.id, candidate.spaceId || targetSpace.id]));
           const movingNation = getUnitNation(unit);
-          snapUnitToSpace(unit, targetSpace);
+          movedUnits.forEach((candidate) => snapUnitToSpace(candidate, targetSpace));
 
           const activatedSet = new Set(state.activatedUnitIds);
-          activatedSet.add(unit.id);
+          movedUnits.forEach((candidate) => activatedSet.add(candidate.id));
           state.activatedUnitIds = Array.from(activatedSet);
 
           if (getCurrentPhase().id === 'action' && movingNation) {
             const enemyPresent = getUnitsInSpace(targetSpace.id).some(
-              (occupant) => getUnitNation(occupant) && getUnitNation(occupant) !== movingNation
+              (occupant) => nationsAreHostile(movingNation, getUnitNation(occupant))
             );
 
             if (enemyPresent) {
-              ensurePendingCombat(targetSpace.id, movingNation, {
-                unitId: unit.id,
-                originSpaceId: originSpaceId || targetSpace.id
+              movedUnits.forEach((candidate) => {
+                ensurePendingCombat(targetSpace.id, movingNation, {
+                  unitId: candidate.id,
+                  originSpaceId: originSpaceByUnitId.get(candidate.id) || targetSpace.id
+                });
               });
             }
           }
@@ -3061,6 +3438,7 @@
   if (resetGameButton) {
     resetGameButton.addEventListener('click', () => {
       localStorage.removeItem(STORAGE_KEY);
+      sessionStorage.setItem(RESET_SCROLL_RIGHT_KEY, '1');
       window.location.reload();
     });
   }
@@ -3072,7 +3450,9 @@
   syncMapSize();
   updateTurnPhaseUi();
   renderUnits();
-  mapViewport.scrollLeft = state.scrollLeft;
+  mapViewport.scrollLeft = shouldResetScrollRight
+    ? Math.max(0, mapCanvas.scrollWidth - mapViewport.clientWidth)
+    : state.scrollLeft;
   mapViewport.scrollTop = state.scrollTop;
 
   analyzeMapSpaces().catch(() => {
@@ -3080,4 +3460,10 @@
       spaceCount.textContent = 'Spaces: unavailable';
     }
   });
+
+  if (shouldResetScrollRight) {
+    mapViewport.scrollLeft = Math.max(0, mapCanvas.scrollWidth - mapViewport.clientWidth);
+    state.scrollLeft = mapViewport.scrollLeft;
+    saveState();
+  }
 })();
