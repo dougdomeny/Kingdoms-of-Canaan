@@ -317,6 +317,7 @@
     pendingEntryCombatUnitIds: [],
     pendingCombats: [],
     processedGrowthTurns: [],
+    processedGrowthTurnKeys: [],
     growthPointsByNation: {},
     vassalByNation: {},
     requiredGarrisons: [],
@@ -608,6 +609,7 @@
             )
           ).sort((first, second) => first - second)
         : [];
+      const processedGrowthTurnKeys = normalizeProcessedGrowthTurnKeys(parsed.processedGrowthTurnKeys);
       const growthPointsByNation = normalizeGrowthPointsByNation(parsed.growthPointsByNation);
       const vassalByNation = normalizeVassalByNation(parsed.vassalByNation);
       const requiredGarrisons = normalizeRequiredGarrisons(parsed.requiredGarrisons);
@@ -626,6 +628,7 @@
         pendingEntryCombatUnitIds,
         pendingCombats,
         processedGrowthTurns,
+        processedGrowthTurnKeys,
         growthPointsByNation,
         vassalByNation,
         requiredGarrisons,
@@ -816,6 +819,20 @@
     });
 
     return normalized;
+  }
+
+  function normalizeProcessedGrowthTurnKeys(value) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return Array.from(
+      new Set(
+        value
+          .map((entry) => String(entry || '').trim())
+          .filter(Boolean)
+      )
+    );
   }
 
   function normalizeVassalByNation(value) {
@@ -1181,7 +1198,12 @@
     }
 
     if (currentPhaseLabel) {
-      currentPhaseLabel.textContent = phase.label;
+      if (phase.id === 'growth') {
+        const excess = getActiveNationGrowthExcess();
+        currentPhaseLabel.textContent = `${phase.label} ${excess}`;
+      } else {
+        currentPhaseLabel.textContent = phase.label;
+      }
     }
 
     if (phaseHelpLabel) {
@@ -2346,6 +2368,27 @@
     return state.growthPointsByNation[nationName];
   }
 
+  function getCurrentGrowthTurnKey() {
+    return `${state.currentTurn}:${state.currentNationIndex}`;
+  }
+
+  function getActiveNationGrowthExcess() {
+    const activeNationEntry = getActiveNationEntry();
+    if (!activeNationEntry || !activeNationEntry.nations) {
+      return 0;
+    }
+
+    let maxExcess = 0;
+    for (const nationName of activeNationEntry.nations) {
+      const growthPoints = state.growthPointsByNation[nationName];
+      if (growthPoints && Number.isFinite(growthPoints.unit)) {
+        maxExcess = Math.max(maxExcess, Math.max(0, growthPoints.unit));
+      }
+    }
+
+    return maxExcess;
+  }
+
   function createGrowthUnit(unitType, placementSpace) {
     const unit = {
       id: createUniqueUnitId(unitType.id),
@@ -2360,22 +2403,51 @@
     return unit;
   }
 
+  function getGrowthPlacementSpaceWithinCap(placementSpaces, addedUnitsBySpaceId) {
+    for (const space of placementSpaces) {
+      const growthCap = getSpaceGrowthValue(space);
+      if (growthCap <= 0) {
+        continue;
+      }
+
+      const addedSoFar = addedUnitsBySpaceId.get(space.id) || 0;
+      if (addedSoFar < growthCap) {
+        return space;
+      }
+    }
+
+    return null;
+  }
+
+  function recordGrowthPlacement(spaceId, addedUnitsBySpaceId) {
+    const currentCount = addedUnitsBySpaceId.get(spaceId) || 0;
+    addedUnitsBySpaceId.set(spaceId, currentCount + 1);
+  }
+
   function applyGrowthForCurrentTurn() {
-    if (state.processedGrowthTurns.includes(state.currentTurn)) {
+    const growthTurnKey = getCurrentGrowthTurnKey();
+    if (state.processedGrowthTurnKeys.includes(growthTurnKey)) {
       return;
     }
 
     const landPointsByNation = getLandPointsByNation();
     const spawnedUnits = [];
+    const addedUnitsBySpaceId = new Map();
+    const activeNationEntry = getActiveNationEntry();
+    const activeNations = activeNationEntry && activeNationEntry.nations
+      ? Array.from(activeNationEntry.nations)
+      : [];
 
-    Object.entries(landPointsByNation).forEach(([nationName, landPoints]) => {
-      if (!canNationReceiveGrowth(nationName) || !Number.isFinite(landPoints) || landPoints <= 0) {
+    activeNations.forEach((nationName) => {
+      const landPoints = landPointsByNation[nationName] || 0;
+      if (!canNationReceiveGrowth(nationName) || !Number.isFinite(landPoints)) {
         return;
       }
 
       const growthPoints = ensureNationGrowthPoints(nationName);
-      growthPoints.unit += landPoints;
-      growthPoints.chariot += landPoints;
+      if (landPoints > 0) {
+        growthPoints.unit += landPoints;
+      }
 
       const unitType = getNationUnitTypeForGrowth(nationName, 'standard');
       while (unitType && growthPoints.unit >= UNIT_GROWTH_THRESHOLD) {
@@ -2384,19 +2456,14 @@
           break;
         }
 
-        spawnedUnits.push(createGrowthUnit(unitType, placementSpaces[0]));
-        growthPoints.unit -= UNIT_GROWTH_THRESHOLD;
-      }
-
-      const chariotType = getNationUnitTypeForGrowth(nationName, 'chariot');
-      while (chariotType && growthPoints.chariot >= CHARIOT_GROWTH_THRESHOLD) {
-        const placementSpaces = getEligibleGrowthPlacementSpaces(nationName, { requireNonHill: true });
-        if (!placementSpaces.length) {
+        const placementSpace = getGrowthPlacementSpaceWithinCap(placementSpaces, addedUnitsBySpaceId);
+        if (!placementSpace) {
           break;
         }
 
-        spawnedUnits.push(createGrowthUnit(chariotType, placementSpaces[0]));
-        growthPoints.chariot -= CHARIOT_GROWTH_THRESHOLD;
+        spawnedUnits.push(createGrowthUnit(unitType, placementSpace));
+        recordGrowthPlacement(placementSpace.id, addedUnitsBySpaceId);
+        growthPoints.unit -= UNIT_GROWTH_THRESHOLD;
       }
     });
 
@@ -2405,7 +2472,7 @@
       syncUnitCounts();
     }
 
-    state.processedGrowthTurns = [...state.processedGrowthTurns, state.currentTurn].sort((first, second) => first - second);
+    state.processedGrowthTurnKeys = [...state.processedGrowthTurnKeys, growthTurnKey];
   }
 
   function ensureLeaderForCurrentTurn() {
