@@ -319,6 +319,7 @@
     processedGrowthTurns: [],
     growthPointsByNation: {},
     vassalByNation: {},
+    requiredGarrisons: [],
     retreatedUnitIds: [],
     activatedUnitIds: [],
     gameComplete: false,
@@ -609,6 +610,7 @@
         : [];
       const growthPointsByNation = normalizeGrowthPointsByNation(parsed.growthPointsByNation);
       const vassalByNation = normalizeVassalByNation(parsed.vassalByNation);
+      const requiredGarrisons = normalizeRequiredGarrisons(parsed.requiredGarrisons);
       const retreatedUnitIds = normalizeUniqueStringList(parsed.retreatedUnitIds);
       const activatedUnitIds = normalizeUniqueStringList(parsed.activatedUnitIds);
 
@@ -626,6 +628,7 @@
         processedGrowthTurns,
         growthPointsByNation,
         vassalByNation,
+        requiredGarrisons,
         retreatedUnitIds,
         activatedUnitIds,
         gameComplete: Boolean(parsed.gameComplete),
@@ -838,6 +841,37 @@
     return normalized;
   }
 
+  function normalizeRequiredGarrisons(value) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    const seen = new Set();
+    const normalized = [];
+
+    value.forEach((entry) => {
+      if (!entry || typeof entry !== 'object') {
+        return;
+      }
+
+      const spaceId = String(entry.spaceId || '').trim();
+      const nation = String(entry.nation || '').trim();
+      if (!spaceId || !nation) {
+        return;
+      }
+
+      const key = `${spaceId}|${nation}`;
+      if (seen.has(key)) {
+        return;
+      }
+
+      seen.add(key);
+      normalized.push({ spaceId, nation });
+    });
+
+    return normalized;
+  }
+
   function adjustUnitTypeCount(unitTypeId, delta) {
     if (!unitTypeById.has(unitTypeId)) {
       return 0;
@@ -867,6 +901,46 @@
     }
 
     return getActiveNationEntry().nations.has(nationName);
+  }
+
+  function getNationEntryUnitCount(nationEntry) {
+    if (!nationEntry || !nationEntry.nations || !nationEntry.nations.size) {
+      return 0;
+    }
+
+    return state.units.reduce((count, unit) => {
+      const unitNation = getUnitNation(unit);
+      if (!unitNation || !nationEntry.nations.has(unitNation)) {
+        return count;
+      }
+
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      return isLeaderUnitType(unitType) ? count : count + 1;
+    }, 0);
+  }
+
+  function findNextPlayableNationTurn(startTurn, startNationIndex) {
+    let turn = startTurn;
+    let nationIndex = startNationIndex;
+
+    while (turn <= TOTAL_TURNS) {
+      nationIndex += 1;
+      if (nationIndex >= NATION_ORDER.length) {
+        nationIndex = 0;
+        turn += 1;
+      }
+
+      if (turn > TOTAL_TURNS) {
+        return null;
+      }
+
+      const candidate = NATION_ORDER[nationIndex];
+      if (getNationEntryUnitCount(candidate) > 0) {
+        return { turn, nationIndex };
+      }
+    }
+
+    return null;
   }
 
   function canInteractWithUnit(unit) {
@@ -1127,13 +1201,18 @@
       phase.id === 'end';
 
     if (nextPhaseButton) {
+      const nextPlayable = phase.id === 'end'
+        ? findNextPlayableNationTurn(state.currentTurn, state.currentNationIndex)
+        : null;
       nextPhaseButton.disabled = state.gameComplete;
       nextPhaseButton.textContent = state.gameComplete
         ? 'Game Complete'
         : isLastNationLastTurn
           ? 'Finish Game'
           : phase.id === 'end'
-            ? `Advance to ${NATION_ORDER[(state.currentNationIndex + 1) % NATION_ORDER.length].label} Turn`
+            ? nextPlayable
+              ? `Advance to ${NATION_ORDER[nextPlayable.nationIndex].label} Turn`
+              : 'Finish Game'
             : phase.nextLabel;
     }
   }
@@ -1160,6 +1239,32 @@
 
   function getUnitsInSpace(spaceId, excludedUnitId = '') {
     return state.units.filter((unit) => unit.spaceId === spaceId && unit.id !== excludedUnitId);
+  }
+
+  function isGarrisonRequired(spaceId, nation) {
+    if (!spaceId || !nation) {
+      return false;
+    }
+
+    return state.requiredGarrisons.some((entry) => entry.spaceId === spaceId && entry.nation === nation);
+  }
+
+  function markGarrisonRequired(spaceId, nation) {
+    if (!spaceId || !nation || isGarrisonRequired(spaceId, nation)) {
+      return;
+    }
+
+    state.requiredGarrisons.push({ spaceId, nation });
+  }
+
+  function cleanGarrisonRequirements() {
+    state.requiredGarrisons = state.requiredGarrisons.filter((entry) => {
+      if (!entry.spaceId || !entry.nation || !spacesById.has(entry.spaceId)) {
+        return false;
+      }
+
+      return getUnitsInSpace(entry.spaceId).some((unit) => getUnitNation(unit) === entry.nation);
+    });
   }
 
   function getNationsInSpace(spaceId) {
@@ -1275,6 +1380,30 @@
     return !nationsAreSubmittedTogether(firstNation, secondNation);
   }
 
+  function isFirstHebrewTurnProtectedNation(attackerNation, defenderNation) {
+    if (state.currentTurn !== 1 || attackerNation !== 'Hebrew') {
+      return false;
+    }
+
+    return defenderNation === 'Ammon' || defenderNation === 'Moab' || defenderNation === 'Edom';
+  }
+
+  function canNationAttackDefender(attackerNation, defenderNation) {
+    if (!attackerNation || !defenderNation) {
+      return false;
+    }
+
+    if (!nationsAreHostile(attackerNation, defenderNation)) {
+      return false;
+    }
+
+    if (isFirstHebrewTurnProtectedNation(attackerNation, defenderNation)) {
+      return false;
+    }
+
+    return true;
+  }
+
   function isSpaceContestable(spaceId) {
     const nations = Array.from(getNationsInSpace(spaceId));
     if (nations.length < 2) {
@@ -1318,7 +1447,7 @@
         defenderUnitIds: getUnitsInSpace(spaceId)
           .filter((unit) => {
             const nation = getUnitNation(unit);
-            return nationsAreHostile(attackerNation, nation);
+            return canNationAttackDefender(attackerNation, nation);
           })
           .map((unit) => unit.id),
         roundsResolved: 0
@@ -1343,7 +1472,7 @@
       pendingCombat.defenderUnitIds = getUnitsInSpace(spaceId)
         .filter((unit) => {
           const nation = getUnitNation(unit);
-          return nationsAreHostile(attackerNation, nation);
+          return canNationAttackDefender(attackerNation, nation);
         })
         .map((unit) => unit.id);
     }
@@ -1379,7 +1508,14 @@
   }
 
   function getUnitCountByNation(nationName) {
-    return state.units.reduce((count, unit) => count + (getUnitNation(unit) === nationName ? 1 : 0), 0);
+    return state.units.reduce((count, unit) => {
+      if (getUnitNation(unit) !== nationName) {
+        return count;
+      }
+
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      return isLeaderUnitType(unitType) ? count : count + 1;
+    }, 0);
   }
 
   function getControlledRegionCountByNation(nationName) {
@@ -1421,7 +1557,7 @@
       return false;
     }
 
-    return getControlledRegionCountByNation(defenderNation) <= 2;
+    return getControlledRegionCountByNation(defenderNation) <= 1;
   }
 
   function applySubmission(defenderNation, attackerNation) {
@@ -1449,20 +1585,32 @@
     return 0;
   }
 
-  function buildCombatDice(units, space) {
+  function buildCombatDice(units, space, hasLeaderSupport = false) {
+    const chariotEffects = [];
     const dice = units.map((unit) => {
       const unitType = unitTypeById.get(unit.unitTypeId);
       const baseRoll = Math.floor(Math.random() * 6) + 1;
+      const terrainModifier = getTerrainCombatModifier(unitType, space);
+      const value = clampCombatDie(baseRoll + terrainModifier);
+      if (terrainModifier !== 0 && unitType && unitType.classification === 'chariot') {
+        chariotEffects.push({
+          unitName: unitType.displayName,
+          before: baseRoll,
+          after: value,
+          modifier: terrainModifier
+        });
+      }
+
       return {
         unitId: unit.id,
         unitName: unitType ? unitType.displayName : unit.label,
-        value: clampCombatDie(baseRoll + getTerrainCombatModifier(unitType, space))
+        value
       };
     });
 
     let leaderEffect = null;
 
-    const hasLeader = units.some((unit) => {
+    const hasLeader = hasLeaderSupport || units.some((unit) => {
       const unitType = unitTypeById.get(unit.unitTypeId);
       return isLeaderUnitType(unitType);
     });
@@ -1488,7 +1636,56 @@
 
     const sortedDice = dice.sort((first, second) => second.value - first.value);
     sortedDice.leaderEffect = leaderEffect;
+    sortedDice.chariotEffects = chariotEffects;
     return sortedDice;
+  }
+
+  function getCappedAttackerDiceUnits(attackerUnits, defenderCount) {
+    if (!Array.isArray(attackerUnits) || !attackerUnits.length) {
+      return [];
+    }
+
+    const maxAttackerDiceUnits = Math.max(1, defenderCount * 4);
+    const nonLeaders = attackerUnits.filter((unit) => {
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      return !isLeaderUnitType(unitType);
+    });
+
+    if (nonLeaders.length) {
+      return nonLeaders.slice(0, maxAttackerDiceUnits);
+    }
+
+    // If only leaders remain, allow one leader die so combat can still resolve.
+    return [attackerUnits[0]];
+  }
+
+  function getDiceRollingDefenderUnits(defenderUnits) {
+    if (!Array.isArray(defenderUnits) || !defenderUnits.length) {
+      return [];
+    }
+
+    const nonLeaders = defenderUnits.filter((unit) => {
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      return !isLeaderUnitType(unitType);
+    });
+
+    if (nonLeaders.length) {
+      return nonLeaders;
+    }
+
+    // If only leaders remain, allow one leader die so combat can still resolve.
+    return [defenderUnits[0]];
+  }
+
+  function getCombatUnitCountExcludingLeaders(units) {
+    if (!Array.isArray(units) || !units.length) {
+      return 0;
+    }
+
+    return units.filter((unit) => {
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      return !isLeaderUnitType(unitType);
+    }).length;
   }
 
   function formatLeaderEffectMessage(sideLabel, leaderEffect) {
@@ -1497,6 +1694,22 @@
     }
 
     return `${sideLabel} leader bonus applied to ${leaderEffect.unitName}: ${leaderEffect.before} to ${leaderEffect.after}.`;
+  }
+
+  function formatChariotEffectsMessage(sideLabel, chariotEffects) {
+    if (!Array.isArray(chariotEffects) || !chariotEffects.length) {
+      return '';
+    }
+
+    const effectText = chariotEffects
+      .map((effect) => {
+        const direction = effect.modifier > 0 ? 'bonus' : 'penalty';
+        const signedModifier = effect.modifier > 0 ? `+${effect.modifier}` : String(effect.modifier);
+        return `${effect.unitName} ${direction} ${signedModifier} (${effect.before} to ${effect.after})`;
+      })
+      .join('; ');
+
+    return `${sideLabel} chariot effects: ${effectText}.`;
   }
 
   function formatGroupedDice(values) {
@@ -1540,15 +1753,19 @@
       return [];
     }
 
-    if (lossCount >= units.length) {
-      return units.map((unit) => unit.id);
-    }
-
     const available = [...units];
     const selected = [];
 
     for (let i = 0; i < lossCount && available.length; i += 1) {
-      const optionsText = available
+      const casualtyPool = (() => {
+        const nonLeaders = available.filter((unit) => {
+          const unitType = unitTypeById.get(unit.unitTypeId);
+          return !isLeaderUnitType(unitType);
+        });
+        return nonLeaders.length ? nonLeaders : available;
+      })();
+
+      const optionsText = casualtyPool
         .map((unit, index) => {
           const unitType = unitTypeById.get(unit.unitTypeId);
           const name = unitType ? unitType.displayName : unit.label;
@@ -1562,7 +1779,7 @@
       );
       const parsed = Number.parseInt(String(choice || '1'), 10);
       const selectedIndex = Number.isFinite(parsed) ? parsed - 1 : 0;
-      const casualty = available[selectedIndex] || available[0];
+      const casualty = casualtyPool[selectedIndex] || casualtyPool[0];
       selected.push(casualty.id);
       const casualtyIndex = available.findIndex((unit) => unit.id === casualty.id);
       if (casualtyIndex >= 0) {
@@ -1704,22 +1921,10 @@
       attackerUnits = getUnitsInSpace(spaceId).filter((unit) => getUnitNation(unit) === attackerNation);
     }
 
-    const defenderIds = Array.isArray(pendingCombat.defenderUnitIds) ? pendingCombat.defenderUnitIds : [];
-    let defenderUnits = defenderIds
-      .map((unitId) => state.units.find((unit) => unit.id === unitId))
-      .filter(
-        (unit) =>
-          unit &&
-          unit.spaceId === spaceId &&
-          getUnitNation(unit) &&
-          getUnitNation(unit) !== attackerNation
-      );
-
-    if (!defenderUnits.length) {
-      defenderUnits = getUnitsInSpace(spaceId).filter(
-        (unit) => getUnitNation(unit) && getUnitNation(unit) !== attackerNation
-      );
-    }
+    const defenderUnits = getUnitsInSpace(spaceId).filter((unit) => {
+      const nation = getUnitNation(unit);
+      return canNationAttackDefender(attackerNation, nation);
+    });
 
     if (!attackerUnits.length || !defenderUnits.length) {
       return {
@@ -1734,32 +1939,22 @@
       };
     }
 
-    const attackerDice = buildCombatDice(attackerUnits, space);
+    const defenderCombatUnitCount = getCombatUnitCountExcludingLeaders(defenderUnits);
+    const attackerDiceUnits = getCappedAttackerDiceUnits(attackerUnits, defenderCombatUnitCount);
+    const attackerHasLeader = attackerUnits.some((unit) => {
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      return isLeaderUnitType(unitType);
+    });
+    const defenderHasLeader = defenderUnits.some((unit) => {
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      return isLeaderUnitType(unitType);
+    });
+
+    const attackerDice = buildCombatDice(attackerDiceUnits, space, attackerHasLeader);
     const defenderNation = getDefenderNationName(attackerNation, defenderUnits);
 
-    if (canDefenderSubmit(defenderNation, attackerNation)) {
-      const shouldSubmit = window.confirm(
-        `${defenderNation} may submit to ${attackerNation}. Submit now and become a vassal?`
-      );
-
-      if (shouldSubmit) {
-        applySubmission(defenderNation, attackerNation);
-        combatDisplayBySpaceId.delete(spaceId);
-        removePendingCombat(pendingCombat.id);
-        return {
-          resolved: true,
-          reason: 'submission',
-          message: `${defenderNation} submitted to ${attackerNation}.`,
-          casualtiesRemoved: 0,
-          casualtyMessage: '',
-          hiddenDiceMessage: '',
-          attackerStillPresent: true,
-          defendersStillPresent: true
-        };
-      }
-    }
-
-    const defenderDice = buildCombatDice(defenderUnits, space);
+    const defenderDiceUnits = getDiceRollingDefenderUnits(defenderUnits);
+    const defenderDice = buildCombatDice(defenderDiceUnits, space, defenderHasLeader);
     const roundLosses = resolveCombatDiceMatchups(attackerDice, defenderDice);
     const displayDiceCount = Math.min(attackerDice.length, defenderDice.length);
     const hiddenAttackerDice = attackerDice.slice(displayDiceCount).map((die) => die.value);
@@ -1775,7 +1970,9 @@
 
     const leaderEffectMessages = [
       formatLeaderEffectMessage(attackerNation, attackerDice.leaderEffect),
-      formatLeaderEffectMessage(defenderNation, defenderDice.leaderEffect)
+      formatLeaderEffectMessage(defenderNation, defenderDice.leaderEffect),
+      formatChariotEffectsMessage(attackerNation, attackerDice.chariotEffects),
+      formatChariotEffectsMessage(defenderNation, defenderDice.chariotEffects)
     ].filter(Boolean);
 
     const attackerCasualties = chooseCasualtyUnitIds(attackerUnits, roundLosses.attackerLosses, `${attackerNation} (attacker)`);
@@ -1792,6 +1989,42 @@
       const nation = getUnitNation(unit);
       return nation && nation !== attackerNation;
     });
+
+    const roundSummaryMessage = casualtiesRemoved
+      ? [
+          `${casualtiesRemoved} unit${casualtiesRemoved === 1 ? '' : 's'} removed (${attackerNation} lost ${attackerCasualties.length}, ${defenderNation} lost ${defenderCasualties.length}).`,
+          ...leaderEffectMessages,
+          hiddenDiceMessage
+        ].join(' ')
+      : [
+          ...leaderEffectMessages,
+          hiddenDiceMessage
+        ]
+          .filter(Boolean)
+          .join(' ');
+
+    if (attackerStillPresent && defendersStillPresent && canDefenderSubmit(defenderNation, attackerNation)) {
+      const shouldSubmit = window.confirm(
+        `${defenderNation} may submit to ${attackerNation}. Submit now and become a vassal?`
+      );
+
+      if (shouldSubmit) {
+        const submissionMessage = `${defenderNation} submitted to ${attackerNation}.`;
+        applySubmission(defenderNation, attackerNation);
+        combatDisplayBySpaceId.delete(spaceId);
+        removePendingCombat(pendingCombat.id);
+        return {
+          resolved: true,
+          reason: 'submission',
+          message: submissionMessage,
+          casualtiesRemoved,
+          casualtyMessage: [roundSummaryMessage, submissionMessage].filter(Boolean).join(' '),
+          hiddenDiceMessage,
+          attackerStillPresent: true,
+          defendersStillPresent: true
+        };
+      }
+    }
 
     combatDisplayBySpaceId.set(spaceId, {
       attackerNation,
@@ -1810,18 +2043,7 @@
       message: '',
       casualtiesRemoved,
       hiddenDiceMessage,
-      casualtyMessage: casualtiesRemoved
-        ? [
-            `${casualtiesRemoved} unit${casualtiesRemoved === 1 ? '' : 's'} removed (${attackerNation} lost ${attackerCasualties.length}, ${defenderNation} lost ${defenderCasualties.length}).`,
-            ...leaderEffectMessages,
-            hiddenDiceMessage
-          ].join(' ')
-        : [
-            ...leaderEffectMessages,
-            hiddenDiceMessage
-          ]
-            .filter(Boolean)
-            .join(' '),
+      casualtyMessage: roundSummaryMessage,
       attackerStillPresent,
       defendersStillPresent
     };
@@ -1875,6 +2097,14 @@
       return;
     }
 
+    const blockedDefenderPresent = getUnitsInSpace(spaceId).some((unit) =>
+      isFirstHebrewTurnProtectedNation(pendingCombat.attackerNation, getUnitNation(unit))
+    );
+    if (blockedDefenderPresent) {
+      setCombatStatus('During the first Hebrew turn, Hebrew units may not attack Ammon, Moab, or Edom.', 'error', 6500);
+      return;
+    }
+
     const result = resolveCombatRound(pendingCombat);
     if (!result.resolved) {
       cleanPendingCombats();
@@ -1887,10 +2117,24 @@
     }
 
     if (result.reason === 'submission') {
+      const resolvedCombatSpaceId = pendingCombat.spaceId;
+      markGarrisonRequired(pendingCombat.spaceId, pendingCombat.attackerNation);
       cleanPendingCombats();
       renderUnits();
       saveState();
       setCombatStatus(result.message || 'The defender submitted.', 'success');
+
+      if (result.casualtiesRemoved > 0 || result.hiddenDiceMessage) {
+        showCombatNotice(
+          result.casualtyMessage,
+          () => {
+            combatDisplayBySpaceId.delete(resolvedCombatSpaceId);
+            renderUnits();
+            saveState();
+          },
+          resolvedCombatSpaceId
+        );
+      }
       return;
     }
 
@@ -1903,6 +2147,9 @@
     }
 
     if (!result.attackerStillPresent || !result.defendersStillPresent) {
+      if (result.attackerStillPresent && !result.defendersStillPresent) {
+        markGarrisonRequired(pendingCombat.spaceId, pendingCombat.attackerNation);
+      }
       removePendingCombat(pendingCombat.id);
       setCombatStatus('Combat resolved. One side no longer has units in this space.', 'success');
     } else {
@@ -1957,20 +2204,20 @@
         return { attackerRetreated: false, defenderSubmitted: false };
       }
 
-      const defenderNationSet = new Set(defenderUnits.map((unit) => getUnitNation(unit)).filter(Boolean));
-      const defendersSingleNation = defenderNationSet.size === 1 ? Array.from(defenderNationSet)[0] : '';
-      if (defendersSingleNation && canDefenderSubmit(defendersSingleNation, attackerNation)) {
-        const shouldSubmit = window.confirm(
-          `${defendersSingleNation} can submit to ${attackerNation}. Submit now and become a vassal?`
-        );
-        if (shouldSubmit) {
-          applySubmission(defendersSingleNation, attackerNation);
-          return { attackerRetreated: false, defenderSubmitted: true };
-        }
-      }
+      const defenderCombatUnitCount = getCombatUnitCountExcludingLeaders(defenderUnits);
+      const attackerDiceUnits = getCappedAttackerDiceUnits(attackerUnits, defenderCombatUnitCount);
+      const attackerHasLeader = attackerUnits.some((unit) => {
+        const unitType = unitTypeById.get(unit.unitTypeId);
+        return isLeaderUnitType(unitType);
+      });
+      const defenderHasLeader = defenderUnits.some((unit) => {
+        const unitType = unitTypeById.get(unit.unitTypeId);
+        return isLeaderUnitType(unitType);
+      });
 
-      const attackerDice = buildCombatDice(attackerUnits, space);
-      const defenderDice = buildCombatDice(defenderUnits, space);
+      const attackerDice = buildCombatDice(attackerDiceUnits, space, attackerHasLeader);
+      const defenderDiceUnits = getDiceRollingDefenderUnits(defenderUnits);
+      const defenderDice = buildCombatDice(defenderDiceUnits, space, defenderHasLeader);
       const roundLosses = resolveCombatDiceMatchups(attackerDice, defenderDice);
 
       const attackerCasualties = chooseCasualtyUnitIds(attackerUnits, roundLosses.attackerLosses, `${attackerNation} (attacker)`);
@@ -1980,7 +2227,23 @@
       const attackerStillPresent = getUnitsInSpace(spaceId).some((unit) => getUnitNation(unit) === attackerNation);
       const defendersStillPresent = getUnitsInSpace(spaceId).some((unit) => getUnitNation(unit) !== attackerNation);
       if (!attackerStillPresent || !defendersStillPresent) {
+        if (attackerStillPresent && !defendersStillPresent) {
+          markGarrisonRequired(spaceId, attackerNation);
+        }
         return { attackerRetreated: false, defenderSubmitted: false };
+      }
+
+      const defenderNationSet = new Set(defenderUnits.map((unit) => getUnitNation(unit)).filter(Boolean));
+      const defendersSingleNation = defenderNationSet.size === 1 ? Array.from(defenderNationSet)[0] : '';
+      if (defendersSingleNation && canDefenderSubmit(defendersSingleNation, attackerNation)) {
+        const shouldSubmit = window.confirm(
+          `${defendersSingleNation} can submit to ${attackerNation}. Submit now and become a vassal?`
+        );
+        if (shouldSubmit) {
+          applySubmission(defendersSingleNation, attackerNation);
+          markGarrisonRequired(spaceId, attackerNation);
+          return { attackerRetreated: false, defenderSubmitted: true };
+        }
       }
 
       const canRetreat = Boolean(previousSpaceId && spacesById.has(previousSpaceId));
@@ -2268,6 +2531,7 @@
     const phase = getCurrentPhase();
     evaluateVassalBreakFree();
     cleanPendingCombats();
+    cleanGarrisonRequirements();
 
     if (phase.id === 'end') {
       if (hasLeaderOnBoard()) {
@@ -2302,21 +2566,19 @@
     } else if (phase.id === 'action') {
       state.currentPhaseIndex = 2;
     } else {
-      // End phase complete: advance to next nation, or next turn if all nations done
-      const nextNationIndex = state.currentNationIndex + 1;
-      if (nextNationIndex < NATION_ORDER.length) {
-        state.currentNationIndex = nextNationIndex;
+      // End phase complete: advance to next playable nation, skipping nations with no non-leader units.
+      const nextPlayable = findNextPlayableNationTurn(state.currentTurn, state.currentNationIndex);
+      if (nextPlayable) {
+        state.currentTurn = nextPlayable.turn;
+        state.currentNationIndex = nextPlayable.nationIndex;
         state.currentPhaseIndex = 0;
         state.activatedUnitIds = [];
         state.retreatedUnitIds = [];
       } else if (state.currentTurn >= TOTAL_TURNS) {
         state.gameComplete = true;
       } else {
-        state.currentTurn += 1;
-        state.currentNationIndex = 0;
-        state.currentPhaseIndex = 0;
-        state.activatedUnitIds = [];
-        state.retreatedUnitIds = [];
+        // No playable nation remains between current position and final turn.
+        state.gameComplete = true;
       }
     }
 
@@ -3285,7 +3547,7 @@
 
     const unit = state.units.find((item) => item.id === dragState.unitId);
     if (unit) {
-      const movedUnits = Array.isArray(dragState.movedUnitIds) && dragState.movedUnitIds.length
+      let movedUnits = Array.isArray(dragState.movedUnitIds) && dragState.movedUnitIds.length
         ? dragState.movedUnitIds
             .map((unitId) => state.units.find((item) => item.id === unitId))
             .filter(Boolean)
@@ -3297,17 +3559,90 @@
       if (detectedSpaces.length) {
         const targetSpace = findSpaceForBoardPoint(boardX, boardY);
         if (targetSpace && canUnitMoveToSpace(unit, targetSpace)) {
-          const originSpaceByUnitId = new Map(movedUnits.map((candidate) => [candidate.id, candidate.spaceId || targetSpace.id]));
           const movingNation = getUnitNation(unit);
+          const targetWasEmpty = getUnitsInSpace(targetSpace.id).length === 0;
+          const movingFromSpaceId = unit.spaceId && spacesById.has(unit.spaceId) ? unit.spaceId : '';
+          if (movingFromSpaceId && targetSpace.id !== movingFromSpaceId && movingNation) {
+            const nationUnitsAtOrigin = getUnitsInSpace(movingFromSpaceId).filter(
+              (candidate) => getUnitNation(candidate) === movingNation
+            ).length;
+            if (isGarrisonRequired(movingFromSpaceId, movingNation)) {
+              const movingNationUnits = movedUnits.filter(
+                (candidate) => candidate.spaceId === movingFromSpaceId && getUnitNation(candidate) === movingNation
+              );
+              const movingNationUnitCount = movingNationUnits.length;
+              const remainingAtOrigin = nationUnitsAtOrigin - movingNationUnitCount;
+
+              // Shift-stack movement should automatically leave one required garrison unit behind.
+              if (remainingAtOrigin < 1 && movingNationUnitCount > 0) {
+                const fallbackUnit = movingNationUnits[0];
+                const nonLeaderUnit = movingNationUnits.find((candidate) => {
+                  const unitType = unitTypeById.get(candidate.unitTypeId);
+                  return !isLeaderUnitType(unitType);
+                });
+                const unitToLeave = nonLeaderUnit || fallbackUnit;
+                if (unitToLeave) {
+                  movedUnits = movedUnits.filter((candidate) => candidate.id !== unitToLeave.id);
+                }
+              }
+
+              if (!movedUnits.length) {
+                setCombatStatus('A garrison is required here. No units moved.', 'error', 5000);
+                dragState.element.classList.remove('dragging');
+                dragState = null;
+                renderUnits();
+                saveState();
+                return;
+              }
+
+              const updatedMovingNationCount = movedUnits.filter(
+                (candidate) => candidate.spaceId === movingFromSpaceId && getUnitNation(candidate) === movingNation
+              ).length;
+              const updatedRemainingAtOrigin = nationUnitsAtOrigin - updatedMovingNationCount;
+              if (updatedRemainingAtOrigin < 1) {
+                setCombatStatus('A garrison is required here. Leave at least one unit behind before moving on.', 'error', 6000);
+                dragState.element.classList.remove('dragging');
+                dragState = null;
+                renderUnits();
+                saveState();
+                return;
+              }
+            }
+          }
+
+          const originSpaceByUnitId = new Map(movedUnits.map((candidate) => [candidate.id, candidate.spaceId || targetSpace.id]));
           movedUnits.forEach((candidate) => snapUnitToSpace(candidate, targetSpace));
+
+          if (targetWasEmpty && movingNation) {
+            markGarrisonRequired(targetSpace.id, movingNation);
+          }
 
           const activatedSet = new Set(state.activatedUnitIds);
           movedUnits.forEach((candidate) => activatedSet.add(candidate.id));
           state.activatedUnitIds = Array.from(activatedSet);
 
           if (getCurrentPhase().id === 'action' && movingNation) {
+            const blockedEnemyPresent = getUnitsInSpace(targetSpace.id).some((occupant) =>
+              isFirstHebrewTurnProtectedNation(movingNation, getUnitNation(occupant))
+            );
+            if (blockedEnemyPresent) {
+              const originSpaceByUnitId = new Map(movedUnits.map((candidate) => [candidate.id, candidate.spaceId || targetSpace.id]));
+              movedUnits.forEach((candidate) => {
+                const originSpace = spacesById.get(originSpaceByUnitId.get(candidate.id));
+                if (originSpace) {
+                  snapUnitToSpace(candidate, originSpace);
+                }
+              });
+              setCombatStatus('During the first Hebrew turn, Hebrew units may not attack Ammon, Moab, or Edom.', 'error', 6500);
+              dragState.element.classList.remove('dragging');
+              dragState = null;
+              renderUnits();
+              saveState();
+              return;
+            }
+
             const enemyPresent = getUnitsInSpace(targetSpace.id).some(
-              (occupant) => nationsAreHostile(movingNation, getUnitNation(occupant))
+              (occupant) => canNationAttackDefender(movingNation, getUnitNation(occupant))
             );
 
             if (enemyPresent) {
