@@ -40,6 +40,7 @@ main {
 .turn-status {
   display: grid;
   gap: 0.1rem;
+  width: 100%;
   min-width: 13rem;
   padding: 0.45rem 0.7rem;
   border: 1px solid #8d7758;

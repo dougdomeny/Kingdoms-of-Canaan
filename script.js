@@ -262,7 +262,6 @@
     [19, 30],
     [19, 31],
     [19, 26],
-    [26, 31],
     [26, 33],
     [32, 33],
     [12, 14],
@@ -273,6 +272,7 @@
     [16, 17],
     [16, 18],
     [16, 21],
+    [16, 22],
     [21, 22],
     [22, 24],
     [17, 25],
@@ -286,14 +286,12 @@
     [27, 32],
     [32, 34],
     [26, 32],
-    [31, 33],
     [15, 18],
     [15, 19],
     [18, 24],
     [18, 22],
     [27, 34],
     [18, 19],
-    [30, 31],
     [17, 22],
     [17, 20],
     [25, 27],
@@ -319,6 +317,7 @@
     processedGrowthTurns: [],
     processedGrowthTurnKeys: [],
     growthPointsByNation: {},
+    growthSummaryByTurnKey: {},
     vassalByNation: {},
     requiredGarrisons: [],
     retreatedUnitIds: [],
@@ -329,7 +328,7 @@
       amorite: 6,
       canaan: 9,
       'egypt-chariot': 1,
-      hebrew: 26,
+      hebrew: 13,
       hittite: 5,
       'hittite-chariot': 1,
       moab: 2,
@@ -347,7 +346,7 @@
       { id: 'phoenicia-1', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
       { id: 'phoenicia-2', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
       { id: 'phoenicia-3', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
-      ...Array.from({ length: 26 }, (_, index) => ({
+      ...Array.from({ length: 13 }, (_, index) => ({
         id: `hebrew-${index + 1}`,
         unitTypeId: 'hebrew',
         label: 'HEB',
@@ -611,6 +610,7 @@
         : [];
       const processedGrowthTurnKeys = normalizeProcessedGrowthTurnKeys(parsed.processedGrowthTurnKeys);
       const growthPointsByNation = normalizeGrowthPointsByNation(parsed.growthPointsByNation);
+      const growthSummaryByTurnKey = normalizeGrowthSummaryByTurnKey(parsed.growthSummaryByTurnKey);
       const vassalByNation = normalizeVassalByNation(parsed.vassalByNation);
       const requiredGarrisons = normalizeRequiredGarrisons(parsed.requiredGarrisons);
       const retreatedUnitIds = normalizeUniqueStringList(parsed.retreatedUnitIds);
@@ -630,6 +630,7 @@
         processedGrowthTurns,
         processedGrowthTurnKeys,
         growthPointsByNation,
+        growthSummaryByTurnKey,
         vassalByNation,
         requiredGarrisons,
         retreatedUnitIds,
@@ -821,6 +822,27 @@
     return normalized;
   }
 
+  function normalizeGrowthSummaryByTurnKey(value) {
+    const normalized = {};
+    if (!value || typeof value !== 'object') {
+      return normalized;
+    }
+
+    Object.entries(value).forEach(([turnKey, summary]) => {
+      if (!turnKey || !summary || typeof summary !== 'object') {
+        return;
+      }
+
+      normalized[String(turnKey)] = {
+        regionCount: Math.max(0, sanitizeInteger(summary.regionCount, 0, 9999, 0)),
+        totalGrowthPoints: Math.max(0, sanitizeInteger(summary.totalGrowthPoints, 0, 9999, 0)),
+        unitsAdded: Math.max(0, sanitizeInteger(summary.unitsAdded, 0, 9999, 0))
+      };
+    });
+
+    return normalized;
+  }
+
   function normalizeProcessedGrowthTurnKeys(value) {
     if (!Array.isArray(value)) {
       return [];
@@ -995,6 +1017,10 @@
 
   function isLeaderUnitType(unitType) {
     return Boolean(unitType && unitType.classification === 'leader');
+  }
+
+  function isChariotUnitType(unitType) {
+    return Boolean(unitType && unitType.classification === 'chariot');
   }
 
   function isInvaderUnitType(unitType) {
@@ -1199,8 +1225,8 @@
 
     if (currentPhaseLabel) {
       if (phase.id === 'growth') {
-        const excess = getActiveNationGrowthExcess();
-        currentPhaseLabel.textContent = `${phase.label} ${excess}`;
+        const growthStats = getActiveNationGrowthDisplayStats();
+        currentPhaseLabel.textContent = `${phase.label} Growth points: ${growthStats.excess} Regions: ${growthStats.regionCount} Total growth points: ${growthStats.totalGrowthPoints} Units added: ${growthStats.unitsAdded}`;
       } else {
         currentPhaseLabel.textContent = phase.label;
       }
@@ -1677,8 +1703,7 @@
       return nonLeaders.slice(0, maxAttackerDiceUnits);
     }
 
-    // If only leaders remain, allow one leader die so combat can still resolve.
-    return [attackerUnits[0]];
+    return [];
   }
 
   function getDiceRollingDefenderUnits(defenderUnits) {
@@ -1695,8 +1720,7 @@
       return nonLeaders;
     }
 
-    // If only leaders remain, allow one leader die so combat can still resolve.
-    return [defenderUnits[0]];
+    return [];
   }
 
   function getCombatUnitCountExcludingLeaders(units) {
@@ -1708,6 +1732,19 @@
       const unitType = unitTypeById.get(unit.unitTypeId);
       return !isLeaderUnitType(unitType);
     }).length;
+  }
+
+  function getLeaderOnlyUnitIds(units) {
+    if (!Array.isArray(units) || !units.length) {
+      return [];
+    }
+
+    return units
+      .filter((unit) => {
+        const unitType = unitTypeById.get(unit.unitTypeId);
+        return isLeaderUnitType(unitType);
+      })
+      .map((unit) => unit.id);
   }
 
   function formatLeaderEffectMessage(sideLabel, leaderEffect) {
@@ -1963,6 +2000,44 @@
 
     const defenderCombatUnitCount = getCombatUnitCountExcludingLeaders(defenderUnits);
     const attackerDiceUnits = getCappedAttackerDiceUnits(attackerUnits, defenderCombatUnitCount);
+    const defenderDiceUnits = getDiceRollingDefenderUnits(defenderUnits);
+    const defenderNation = getDefenderNationName(attackerNation, defenderUnits);
+    const attackerLeadersOnly = attackerUnits.length > 0 && !attackerDiceUnits.length;
+    const defenderLeadersOnly = defenderUnits.length > 0 && !defenderDiceUnits.length;
+
+    if (attackerLeadersOnly || defenderLeadersOnly) {
+      const removedUnitIds = [
+        ...(attackerLeadersOnly ? getLeaderOnlyUnitIds(attackerUnits) : []),
+        ...(defenderLeadersOnly ? getLeaderOnlyUnitIds(defenderUnits) : [])
+      ];
+      const casualtiesRemoved = removedUnitIds.length;
+      removeUnitsById(removedUnitIds);
+
+      const attackerStillPresent = getUnitsInSpace(spaceId).some((unit) => getUnitNation(unit) === attackerNation);
+      const defendersStillPresent = getUnitsInSpace(spaceId).some((unit) => {
+        const nation = getUnitNation(unit);
+        return nation && nation !== attackerNation;
+      });
+
+      const casualtyMessage = [
+        attackerLeadersOnly ? `${attackerNation} leaders were removed because leaders cannot fight alone.` : '',
+        defenderLeadersOnly ? `${defenderNation} leaders were removed because leaders cannot fight alone.` : ''
+      ]
+        .filter(Boolean)
+        .join(' ');
+
+      return {
+        resolved: true,
+        reason: 'leaders-removed',
+        message: '',
+        casualtiesRemoved,
+        casualtyMessage,
+        hiddenDiceMessage: '',
+        attackerStillPresent,
+        defendersStillPresent
+      };
+    }
+
     const attackerHasLeader = attackerUnits.some((unit) => {
       const unitType = unitTypeById.get(unit.unitTypeId);
       return isLeaderUnitType(unitType);
@@ -1973,9 +2048,6 @@
     });
 
     const attackerDice = buildCombatDice(attackerDiceUnits, space, attackerHasLeader);
-    const defenderNation = getDefenderNationName(attackerNation, defenderUnits);
-
-    const defenderDiceUnits = getDiceRollingDefenderUnits(defenderUnits);
     const defenderDice = buildCombatDice(defenderDiceUnits, space, defenderHasLeader);
     const roundLosses = resolveCombatDiceMatchups(attackerDice, defenderDice);
     const displayDiceCount = Math.min(attackerDice.length, defenderDice.length);
@@ -2051,8 +2123,8 @@
     combatDisplayBySpaceId.set(spaceId, {
       attackerNation,
       defenderNation,
-      attackerUnitIds: attackerDice.slice(0, displayDiceCount).map((die) => die.unitId),
-      defenderUnitIds: defenderDice.slice(0, displayDiceCount).map((die) => die.unitId),
+      attackerUnitIds: attackerUnits.map((unit) => unit.id),
+      defenderUnitIds: defenderUnits.map((unit) => unit.id),
       attackerDice: attackerDice.slice(0, displayDiceCount).map((die) => die.value),
       defenderDice: defenderDice.slice(0, displayDiceCount).map((die) => die.value),
       attackerLosses: roundLosses.attackerLosses,
@@ -2228,6 +2300,26 @@
 
       const defenderCombatUnitCount = getCombatUnitCountExcludingLeaders(defenderUnits);
       const attackerDiceUnits = getCappedAttackerDiceUnits(attackerUnits, defenderCombatUnitCount);
+      const defenderDiceUnits = getDiceRollingDefenderUnits(defenderUnits);
+      const attackerLeadersOnly = attackerUnits.length > 0 && !attackerDiceUnits.length;
+      const defenderLeadersOnly = defenderUnits.length > 0 && !defenderDiceUnits.length;
+
+      if (attackerLeadersOnly || defenderLeadersOnly) {
+        const removedUnitIds = [
+          ...(attackerLeadersOnly ? getLeaderOnlyUnitIds(attackerUnits) : []),
+          ...(defenderLeadersOnly ? getLeaderOnlyUnitIds(defenderUnits) : [])
+        ];
+        removeUnitsById(removedUnitIds);
+
+        const attackerStillPresent = getUnitsInSpace(spaceId).some((unit) => getUnitNation(unit) === attackerNation);
+        const defendersStillPresent = getUnitsInSpace(spaceId).some((unit) => getUnitNation(unit) !== attackerNation);
+        if (attackerStillPresent && !defendersStillPresent) {
+          markGarrisonRequired(spaceId, attackerNation);
+        }
+
+        return { attackerRetreated: false, defenderSubmitted: false };
+      }
+
       const attackerHasLeader = attackerUnits.some((unit) => {
         const unitType = unitTypeById.get(unit.unitTypeId);
         return isLeaderUnitType(unitType);
@@ -2238,7 +2330,6 @@
       });
 
       const attackerDice = buildCombatDice(attackerDiceUnits, space, attackerHasLeader);
-      const defenderDiceUnits = getDiceRollingDefenderUnits(defenderUnits);
       const defenderDice = buildCombatDice(defenderDiceUnits, space, defenderHasLeader);
       const roundLosses = resolveCombatDiceMatchups(attackerDice, defenderDice);
 
@@ -2372,14 +2463,18 @@
     return `${state.currentTurn}:${state.currentNationIndex}`;
   }
 
-  function getActiveNationGrowthExcess() {
+  function getActiveNationNames() {
     const activeNationEntry = getActiveNationEntry();
     if (!activeNationEntry || !activeNationEntry.nations) {
-      return 0;
+      return [];
     }
 
+    return Array.from(activeNationEntry.nations);
+  }
+
+  function getActiveNationGrowthExcess() {
     let maxExcess = 0;
-    for (const nationName of activeNationEntry.nations) {
+    for (const nationName of getActiveNationNames()) {
       const growthPoints = state.growthPointsByNation[nationName];
       if (growthPoints && Number.isFinite(growthPoints.unit)) {
         maxExcess = Math.max(maxExcess, Math.max(0, growthPoints.unit));
@@ -2387,6 +2482,27 @@
     }
 
     return maxExcess;
+  }
+
+  function getActiveNationGrowthDisplayStats() {
+    const growthTurnKey = getCurrentGrowthTurnKey();
+    const savedSummary = state.growthSummaryByTurnKey[growthTurnKey];
+    const activeNationNames = getActiveNationNames();
+    const controlledSpacesByNation = getControlledSpacesByNation();
+    const landPointsByNation = getLandPointsByNation();
+    const regionCount = savedSummary
+      ? savedSummary.regionCount
+      : activeNationNames.reduce((sum, nationName) => sum + (controlledSpacesByNation.get(nationName) || []).length, 0);
+    const totalGrowthPoints = savedSummary
+      ? savedSummary.totalGrowthPoints
+      : activeNationNames.reduce((sum, nationName) => sum + (landPointsByNation[nationName] || 0), 0);
+
+    return {
+      excess: getActiveNationGrowthExcess(),
+      regionCount,
+      totalGrowthPoints,
+      unitsAdded: savedSummary ? savedSummary.unitsAdded : 0
+    };
   }
 
   function createGrowthUnit(unitType, placementSpace) {
@@ -2430,13 +2546,19 @@
       return;
     }
 
+    const controlledSpacesByNation = getControlledSpacesByNation();
     const landPointsByNation = getLandPointsByNation();
     const spawnedUnits = [];
     const addedUnitsBySpaceId = new Map();
-    const activeNationEntry = getActiveNationEntry();
-    const activeNations = activeNationEntry && activeNationEntry.nations
-      ? Array.from(activeNationEntry.nations)
-      : [];
+    const activeNations = getActiveNationNames();
+    const regionCount = activeNations.reduce(
+      (sum, nationName) => sum + (controlledSpacesByNation.get(nationName) || []).length,
+      0
+    );
+    const totalGrowthPoints = activeNations.reduce(
+      (sum, nationName) => sum + (landPointsByNation[nationName] || 0),
+      0
+    );
 
     activeNations.forEach((nationName) => {
       const landPoints = landPointsByNation[nationName] || 0;
@@ -2472,6 +2594,11 @@
       syncUnitCounts();
     }
 
+    state.growthSummaryByTurnKey[growthTurnKey] = {
+      regionCount,
+      totalGrowthPoints,
+      unitsAdded: spawnedUnits.length
+    };
     state.processedGrowthTurnKeys = [...state.processedGrowthTurnKeys, growthTurnKey];
   }
 
@@ -2776,6 +2903,18 @@
 
     if (unit.spaceId === targetSpace.id) {
       return true;
+    }
+
+    if (isLeaderUnitType(unitType)) {
+      const companionUnits = getUnitsMovedByDrag(unit, false).filter((candidate) => candidate.id !== unit.id);
+      if (!companionUnits.length) {
+        const sameNationInTarget = getUnitsInSpace(targetSpace.id).some(
+          (candidate) => getUnitNation(candidate) === unitNation
+        );
+        if (!sameNationInTarget) {
+          return false;
+        }
+      }
     }
 
     const currentSpace = spacesById.get(unit.spaceId);
@@ -3256,8 +3395,28 @@
     });
   }
 
+  function hasActiveNationLeaderInSpace(spaceId) {
+    if (!spaceId) {
+      return false;
+    }
+
+    return getUnitsInSpace(spaceId).some((candidate) => {
+      const candidateType = unitTypeById.get(candidate.unitTypeId);
+      return isLeaderUnitType(candidateType) && isNationActive(getUnitNation(candidate));
+    });
+  }
+
   function getUnitsMovedByDrag(unit, moveAllInStack) {
-    if (!unit || !moveAllInStack || !unit.spaceId) {
+    if (!unit) {
+      return [];
+    }
+
+    const unitType = unitTypeById.get(unit.unitTypeId);
+    const moveLeaderStack = Boolean(
+      unit.spaceId && (isLeaderUnitType(unitType) || hasActiveNationLeaderInSpace(unit.spaceId))
+    );
+
+    if ((!moveAllInStack && !moveLeaderStack) || !unit.spaceId) {
       return unit ? [unit] : [];
     }
 
@@ -3278,6 +3437,8 @@
 
     const regularStackCounters = new Map();
     const regularStackSizes = new Map();
+    const chariotStackCounters = new Map();
+    const chariotStackSizes = new Map();
     const regularStackPositionByGroupKey = new Map();
     const renderedCenterByUnitId = new Map();
     const renderedEntries = [];
@@ -3292,9 +3453,14 @@
 
       const nationKey = getUnitNation(unit) || unit.unitTypeId;
       const unitType = unitTypeById.get(unit.unitTypeId);
+      const stackClassification = isLeaderUnitType(unitType)
+        ? `leader|${unit.id}`
+        : isChariotUnitType(unitType)
+          ? 'chariot'
+          : 'regular';
       const stackKey = isLeaderUnitType(unitType)
-        ? `${unit.spaceId}|${nationKey}|leader|${unit.id}`
-        : `${unit.spaceId}|${nationKey}|regular`;
+        ? `${unit.spaceId}|${nationKey}|${stackClassification}`
+        : `${unit.spaceId}|${nationKey}|${stackClassification}`;
       const existingEntry = renderedEntryByStackKey.get(stackKey);
       if (existingEntry) {
         existingEntry.count += 1;
@@ -3315,9 +3481,15 @@
         const secondType = unitTypeById.get(second.unit.unitTypeId);
         const firstIsLeader = isLeaderUnitType(firstType);
         const secondIsLeader = isLeaderUnitType(secondType);
+        const firstIsChariot = isChariotUnitType(firstType);
+        const secondIsChariot = isChariotUnitType(secondType);
 
         if (firstIsLeader !== secondIsLeader) {
           return firstIsLeader ? 1 : -1;
+        }
+
+        if (!firstIsLeader && firstIsChariot !== secondIsChariot) {
+          return firstIsChariot ? 1 : -1;
         }
       }
 
@@ -3331,7 +3503,9 @@
       }
 
       const unitType = unitTypeById.get(unit.unitTypeId);
-      if (!isLeaderUnitType(unitType)) {
+      if (isChariotUnitType(unitType)) {
+        chariotStackSizes.set(unit.spaceId, (chariotStackSizes.get(unit.spaceId) || 0) + 1);
+      } else if (!isLeaderUnitType(unitType)) {
         regularStackSizes.set(unit.spaceId, (regularStackSizes.get(unit.spaceId) || 0) + 1);
       }
     });
@@ -3346,9 +3520,10 @@
       button.classList.toggle('unit-locked', unitLocked);
 
       const unitType = unitTypeById.get(unit.unitTypeId);
-  const isLeader = isLeaderUnitType(unitType);
+    const isLeader = isLeaderUnitType(unitType);
+    const isChariot = isChariotUnitType(unitType);
       button.classList.toggle('unit-leader', isLeader);
-      button.style.zIndex = isLeader ? '12' : '3';
+    button.style.zIndex = isLeader ? '12' : isChariot ? '6' : '3';
       button.setAttribute('aria-label', unitType ? unitType.displayName : unit.label);
 
       if (unitType) {
@@ -3386,14 +3561,20 @@
       };
 
       if (hasSpace) {
-        if (isLeader) {
+        if (isLeader || isChariot) {
           const anchorPosition = regularStackPositionByGroupKey.get(groupKey);
           if (anchorPosition) {
             positionOptions.anchorFromRegularStack = true;
             positionOptions.anchorStackIndex = anchorPosition.index;
             positionOptions.anchorStackSize = anchorPosition.size;
           }
-        } else {
+        }
+
+        if (isChariot) {
+          stackIndex = chariotStackCounters.get(unit.spaceId) || 0;
+          stackSize = chariotStackSizes.get(unit.spaceId) || 1;
+          chariotStackCounters.set(unit.spaceId, stackIndex + 1);
+        } else if (!isLeader) {
           stackIndex = regularStackCounters.get(unit.spaceId) || 0;
           stackSize = regularStackSizes.get(unit.spaceId) || 1;
           regularStackCounters.set(unit.spaceId, stackIndex + 1);
@@ -3403,7 +3584,9 @@
 
       const hasSameNationRegularUnit = Boolean(unit.spaceId) && getUnitsInSpace(unit.spaceId, unit.id).some((occupant) => {
         const occupantType = unitTypeById.get(occupant.unitTypeId);
-        return getUnitNation(occupant) === getUnitNation(unit) && !isLeaderUnitType(occupantType);
+        return getUnitNation(occupant) === getUnitNation(unit)
+          && !isLeaderUnitType(occupantType)
+          && !isChariotUnitType(occupantType);
       });
 
       positionUnit(button, unit, stackIndex, stackSize, {
@@ -3567,6 +3750,19 @@
     const unitType = unitTypeById.get(unit.unitTypeId);
     const unitSizePx = UNIT_SIZE_PX * state.zoom;
 
+    if (isChariotUnitType(unitType) && options.anchorFromRegularStack) {
+      const anchorStackIndex = Number.isFinite(options.anchorStackIndex) ? options.anchorStackIndex : 0;
+      const anchorStackSize = Number.isFinite(options.anchorStackSize) ? options.anchorStackSize : 1;
+      const regularCenteredIndex = anchorStackIndex - (anchorStackSize - 1) / 2;
+      const regularCenterX = baseX * state.zoom;
+      const regularCenterY = baseY * state.zoom + regularCenteredIndex * offsetStep;
+      const chariotOffsetPx = unitSizePx * 0.22;
+
+      element.style.left = `${Math.round(regularCenterX + chariotOffsetPx)}px`;
+      element.style.top = `${Math.round(regularCenterY + chariotOffsetPx + verticalOffset)}px`;
+      return;
+    }
+
     if (isLeaderUnitType(unitType) && options.anchorFromRegularStack) {
       const anchorStackIndex = Number.isFinite(options.anchorStackIndex) ? options.anchorStackIndex : stackIndex;
       const anchorStackSize = Number.isFinite(options.anchorStackSize) ? options.anchorStackSize : stackSize;
@@ -3643,13 +3839,43 @@
               // Shift-stack movement should automatically leave one required garrison unit behind.
               if (remainingAtOrigin < 1 && movingNationUnitCount > 0) {
                 const fallbackUnit = movingNationUnits[0];
+                const regularUnit = movingNationUnits.find((candidate) => {
+                  const unitType = unitTypeById.get(candidate.unitTypeId);
+                  return !isLeaderUnitType(unitType) && !isChariotUnitType(unitType);
+                });
                 const nonLeaderUnit = movingNationUnits.find((candidate) => {
                   const unitType = unitTypeById.get(candidate.unitTypeId);
                   return !isLeaderUnitType(unitType);
                 });
-                const unitToLeave = nonLeaderUnit || fallbackUnit;
+                const unitToLeave = regularUnit || nonLeaderUnit || fallbackUnit;
                 if (unitToLeave) {
                   movedUnits = movedUnits.filter((candidate) => candidate.id !== unitToLeave.id);
+                }
+              }
+
+              const movingLeader = movedUnits.find((candidate) => candidate.id === unit.id);
+              if (movingLeader) {
+                const remainingLeaderCompanions = movedUnits.filter((candidate) => {
+                  if (candidate.id === unit.id) {
+                    return false;
+                  }
+
+                  const candidateType = unitTypeById.get(candidate.unitTypeId);
+                  return getUnitNation(candidate) === movingNation && !isLeaderUnitType(candidateType);
+                });
+
+                const movedUnitIds = new Set(movedUnits.map((candidate) => candidate.id));
+                const sameNationInTarget = getUnitsInSpace(targetSpace.id).some(
+                  (candidate) => getUnitNation(candidate) === movingNation && !movedUnitIds.has(candidate.id)
+                );
+
+                if (!remainingLeaderCompanions.length && !sameNationInTarget) {
+                  setCombatStatus('A leader cannot move alone. Leave the leader in place or move another unit with it.', 'error', 6000);
+                  dragState.element.classList.remove('dragging');
+                  dragState = null;
+                  renderUnits();
+                  saveState();
+                  return;
                 }
               }
 
