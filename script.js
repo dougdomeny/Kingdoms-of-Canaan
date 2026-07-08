@@ -29,6 +29,7 @@
   const combatStatusLabel = document.getElementById('combat-status');
 
   const TOTAL_TURNS = 9;
+  const HEBREW_DIVISION_TRIGGER_TURN = 5;
   const NATION_ORDER = [
     { label: 'Hebrew',      nations: new Set(['Hebrew']) },
     { label: 'Israelite',   nations: new Set(['Israel']) },
@@ -322,6 +323,7 @@
     requiredGarrisons: [],
     retreatedUnitIds: [],
     activatedUnitIds: [],
+    hebrewDivisionResolved: false,
     gameComplete: false,
     unitCounts: {
       ammon: 2,
@@ -635,6 +637,7 @@
         requiredGarrisons,
         retreatedUnitIds,
         activatedUnitIds,
+        hebrewDivisionResolved: Boolean(parsed.hebrewDivisionResolved),
         gameComplete: Boolean(parsed.gameComplete),
         unitCounts,
         units: normalizedUnits
@@ -750,6 +753,14 @@
 
     const unitType = unitTypeById.get(unitTypeId);
     return unitType ? unitType.shortLabel : 'UNT';
+  }
+
+  function rollDie() {
+    return Math.floor(Math.random() * 6) + 1;
+  }
+
+  function getDividedHebrewNationForRoll(value) {
+    return value <= 4 ? 'Israel' : 'Judah';
   }
 
   function deriveUnitCountsFromUnits(units) {
@@ -958,6 +969,37 @@
     }, 0);
   }
 
+  function getScheduledLeaderSpec(turn) {
+    const scheduledLeader = leaderSchedule.get(turn);
+    if (!scheduledLeader) {
+      return null;
+    }
+
+    const unitType = unitTypeById.get(scheduledLeader.unitTypeId);
+    if (!unitType) {
+      return null;
+    }
+
+    return {
+      ...scheduledLeader,
+      nation: unitType.nation,
+      unitType
+    };
+  }
+
+  function hasScheduledNationEntryForTurn(turn, nationEntry) {
+    if (!nationEntry || state.spawnedLeaderTurns.includes(turn)) {
+      return false;
+    }
+
+    const scheduledLeader = getScheduledLeaderSpec(turn);
+    if (!scheduledLeader || !nationEntry.nations.has(scheduledLeader.nation)) {
+      return false;
+    }
+
+    return invaderNations.has(scheduledLeader.nation);
+  }
+
   function findNextPlayableNationTurn(startTurn, startNationIndex) {
     let turn = startTurn;
     let nationIndex = startNationIndex;
@@ -974,7 +1016,7 @@
       }
 
       const candidate = NATION_ORDER[nationIndex];
-      if (getNationEntryUnitCount(candidate) > 0) {
+      if (getNationEntryUnitCount(candidate) > 0 || hasScheduledNationEntryForTurn(turn, candidate)) {
         return { turn, nationIndex };
       }
     }
@@ -1041,6 +1083,112 @@
       return 'Canaan';
     }
     return unitType.nation;
+  }
+
+  function applyHebrewDivision() {
+    if (state.hebrewDivisionResolved) {
+      return false;
+    }
+
+    const israelUnitType = getNationUnitTypeForGrowth('Israel', 'standard');
+    const judahUnitType = getNationUnitTypeForGrowth('Judah', 'standard');
+    if (!israelUnitType || !judahUnitType) {
+      return false;
+    }
+
+    const divisionBySpaceId = new Map();
+
+    state.units.forEach((unit) => {
+      if (getUnitNation(unit) !== 'Hebrew' || !unit.spaceId) {
+        return;
+      }
+
+      if (!divisionBySpaceId.has(unit.spaceId)) {
+        const die = rollDie();
+        divisionBySpaceId.set(unit.spaceId, {
+          die,
+          nation: getDividedHebrewNationForRoll(die)
+        });
+      }
+    });
+
+    state.units.forEach((unit) => {
+      if (getUnitNation(unit) !== 'Hebrew' || !unit.spaceId) {
+        return;
+      }
+
+      const division = divisionBySpaceId.get(unit.spaceId);
+      if (!division) {
+        return;
+      }
+
+      unit.unitTypeId = division.nation === 'Israel' ? israelUnitType.id : judahUnitType.id;
+      unit.label = deriveUnitLabel(unit.unitTypeId);
+    });
+
+    state.pendingCombats = state.pendingCombats.map((combat) => {
+      if (combat.attackerNation !== 'Hebrew') {
+        return combat;
+      }
+
+      const division = divisionBySpaceId.get(combat.spaceId);
+      if (!division) {
+        return combat;
+      }
+
+      return {
+        ...combat,
+        attackerNation: division.nation
+      };
+    });
+
+    const updatedRequiredGarrisons = [];
+    const seenRequiredGarrisons = new Set();
+    state.requiredGarrisons.forEach((entry) => {
+      if (!entry || !entry.spaceId || !entry.nation) {
+        return;
+      }
+
+      const division = entry.nation === 'Hebrew' ? divisionBySpaceId.get(entry.spaceId) : null;
+      const nextNation = division ? division.nation : entry.nation;
+      if (!nextNation) {
+        return;
+      }
+
+      const key = `${entry.spaceId}|${nextNation}`;
+      if (seenRequiredGarrisons.has(key)) {
+        return;
+      }
+
+      seenRequiredGarrisons.add(key);
+      updatedRequiredGarrisons.push({ spaceId: entry.spaceId, nation: nextNation });
+    });
+    state.requiredGarrisons = updatedRequiredGarrisons;
+
+    state.vassalByNation = Object.fromEntries(
+      Object.entries(state.vassalByNation).filter(([vassalNation, overlordNation]) => {
+        return vassalNation !== 'Hebrew' && overlordNation !== 'Hebrew';
+      })
+    );
+
+    delete state.growthPointsByNation.Hebrew;
+    state.hebrewDivisionResolved = true;
+    syncUnitCounts();
+
+    if (divisionBySpaceId.size) {
+      const divisionSummary = Array.from(divisionBySpaceId.entries())
+        .map(([spaceId, division]) => {
+          const space = spacesById.get(spaceId);
+          const spaceName = space ? getSpaceBaseName(space) : spaceId;
+          return `${spaceName}: ${division.nation} (${division.die})`;
+        })
+        .join(', ');
+      setCombatStatus(`Hebrew division resolved. ${divisionSummary}.`, 'info', 9000);
+    } else {
+      setCombatStatus('Hebrew division resolved. Hebrew vassals are now independent.', 'info', 9000);
+    }
+
+    return true;
   }
 
   function getSpaceBaseName(space) {
@@ -2425,10 +2573,20 @@
     return unit;
   }
 
-  function hasLeaderOnBoard() {
+  function hasLeaderOnBoard(nationEntry = null) {
+    const nations = nationEntry && nationEntry.nations instanceof Set ? nationEntry.nations : null;
+
     return state.units.some((unit) => {
       const unitType = unitTypeById.get(unit.unitTypeId);
-      return isLeaderUnitType(unitType);
+      if (!isLeaderUnitType(unitType)) {
+        return false;
+      }
+
+      if (!nations) {
+        return true;
+      }
+
+      return nations.has(getUnitNation(unit));
     });
   }
 
@@ -2603,12 +2761,17 @@
   }
 
   function ensureLeaderForCurrentTurn() {
-    if (state.gameComplete || getCurrentPhase().id === 'end') {
+    const phase = getCurrentPhase();
+    if (state.gameComplete || phase.id !== 'growth') {
       return;
     }
 
-    const scheduledLeader = leaderSchedule.get(state.currentTurn);
+    const scheduledLeader = getScheduledLeaderSpec(state.currentTurn);
     if (!scheduledLeader || state.spawnedLeaderTurns.includes(state.currentTurn)) {
+      return;
+    }
+
+    if (!isNationActive(scheduledLeader.nation)) {
       return;
     }
 
@@ -2710,6 +2873,12 @@
   function applyEndPhaseCleanup() {
     const filteredUnits = state.units.filter((unit) => {
       const unitType = unitTypeById.get(unit.unitTypeId);
+      const unitNation = getUnitNation(unit);
+      const belongsToActiveNation = isNationActive(unitNation);
+      if (!belongsToActiveNation) {
+        return true;
+      }
+
       return !isLeaderUnitType(unitType) && !isInvaderUnitType(unitType);
     });
 
@@ -2723,12 +2892,13 @@
 
   function syncTurnState() {
     const phase = getCurrentPhase();
+    const activeNationEntry = getActiveNationEntry();
     evaluateVassalBreakFree();
     cleanPendingCombats();
     cleanGarrisonRequirements();
 
     if (phase.id === 'end') {
-      if (hasLeaderOnBoard()) {
+      if (hasLeaderOnBoard(activeNationEntry)) {
         applyGrowthForCurrentTurn();
       }
       applyEndPhaseCleanup();
@@ -2738,7 +2908,7 @@
     ensureLeaderForCurrentTurn();
     ensureTurnThreePhilistiaReinforcements();
 
-    if (phase.id === 'growth' && !hasLeaderOnBoard()) {
+    if (phase.id === 'growth' && !hasLeaderOnBoard(activeNationEntry)) {
       applyGrowthForCurrentTurn();
     }
 
@@ -2761,7 +2931,16 @@
       state.currentPhaseIndex = 2;
     } else {
       // End phase complete: advance to next playable nation, skipping nations with no non-leader units.
-      const nextPlayable = findNextPlayableNationTurn(state.currentTurn, state.currentNationIndex);
+      let nextPlayable = findNextPlayableNationTurn(state.currentTurn, state.currentNationIndex);
+      if (
+        !state.hebrewDivisionResolved &&
+        state.currentTurn === HEBREW_DIVISION_TRIGGER_TURN &&
+        (!nextPlayable || nextPlayable.turn > state.currentTurn)
+      ) {
+        applyHebrewDivision();
+        nextPlayable = findNextPlayableNationTurn(state.currentTurn, state.currentNationIndex);
+      }
+
       if (nextPlayable) {
         state.currentTurn = nextPlayable.turn;
         state.currentNationIndex = nextPlayable.nationIndex;
@@ -3440,6 +3619,7 @@
     const chariotStackCounters = new Map();
     const chariotStackSizes = new Map();
     const regularStackPositionByGroupKey = new Map();
+    const chariotStackPositionByGroupKey = new Map();
     const renderedCenterByUnitId = new Map();
     const renderedEntries = [];
     const renderedEntryByStackKey = new Map();
@@ -3556,8 +3736,10 @@
       let stackSize = 1;
       const positionOptions = {
         anchorFromRegularStack: false,
+        anchorFromChariotStack: false,
         anchorStackIndex: 0,
-        anchorStackSize: 1
+        anchorStackSize: 1,
+        leaderOffsetMultiplier: 1
       };
 
       if (hasSpace) {
@@ -3570,10 +3752,20 @@
           }
         }
 
+        if (isLeader && !positionOptions.anchorFromRegularStack) {
+          const chariotAnchorPosition = chariotStackPositionByGroupKey.get(groupKey);
+          if (chariotAnchorPosition) {
+            positionOptions.anchorFromChariotStack = true;
+            positionOptions.anchorStackIndex = chariotAnchorPosition.index;
+            positionOptions.anchorStackSize = chariotAnchorPosition.size;
+          }
+        }
+
         if (isChariot) {
           stackIndex = chariotStackCounters.get(unit.spaceId) || 0;
           stackSize = chariotStackSizes.get(unit.spaceId) || 1;
           chariotStackCounters.set(unit.spaceId, stackIndex + 1);
+          chariotStackPositionByGroupKey.set(groupKey, { index: stackIndex, size: stackSize });
         } else if (!isLeader) {
           stackIndex = regularStackCounters.get(unit.spaceId) || 0;
           stackSize = regularStackSizes.get(unit.spaceId) || 1;
@@ -3582,16 +3774,23 @@
         }
       }
 
-      const hasSameNationRegularUnit = Boolean(unit.spaceId) && getUnitsInSpace(unit.spaceId, unit.id).some((occupant) => {
+      const sameNationOccupants = unit.spaceId
+        ? getUnitsInSpace(unit.spaceId, unit.id).filter((occupant) => getUnitNation(occupant) === getUnitNation(unit))
+        : [];
+      const hasSameNationRegularUnit = sameNationOccupants.some((occupant) => {
         const occupantType = unitTypeById.get(occupant.unitTypeId);
-        return getUnitNation(occupant) === getUnitNation(unit)
-          && !isLeaderUnitType(occupantType)
-          && !isChariotUnitType(occupantType);
+        return occupantType && !isLeaderUnitType(occupantType) && !isChariotUnitType(occupantType);
+      });
+      const hasSameNationChariotUnit = sameNationOccupants.some((occupant) => {
+        const occupantType = unitTypeById.get(occupant.unitTypeId);
+        return isChariotUnitType(occupantType);
       });
 
       positionUnit(button, unit, stackIndex, stackSize, {
         ...positionOptions,
-        anchorFromRegularStack: hasSameNationRegularUnit && positionOptions.anchorFromRegularStack
+        anchorFromRegularStack: hasSameNationRegularUnit && positionOptions.anchorFromRegularStack,
+        anchorFromChariotStack: !hasSameNationRegularUnit && hasSameNationChariotUnit && positionOptions.anchorFromChariotStack,
+        leaderOffsetMultiplier: hasSameNationRegularUnit && hasSameNationChariotUnit ? 2 : 1
       });
 
       const unitCenterX = Number.parseFloat(button.style.left);
@@ -3763,7 +3962,7 @@
       return;
     }
 
-    if (isLeaderUnitType(unitType) && options.anchorFromRegularStack) {
+    if (isLeaderUnitType(unitType) && (options.anchorFromRegularStack || options.anchorFromChariotStack)) {
       const anchorStackIndex = Number.isFinite(options.anchorStackIndex) ? options.anchorStackIndex : stackIndex;
       const anchorStackSize = Number.isFinite(options.anchorStackSize) ? options.anchorStackSize : stackSize;
       const regularCenteredIndex = anchorStackIndex - (anchorStackSize - 1) / 2;
@@ -3771,7 +3970,10 @@
       const regularCenterY = baseY * state.zoom + regularCenteredIndex * offsetStep;
       const regularUpperRightX = regularCenterX + unitSizePx / 2;
       const regularUpperRightY = regularCenterY - unitSizePx / 2;
-      const leaderOffsetPx = unitSizePx * 0.25;
+      const leaderOffsetMultiplier = Number.isFinite(options.leaderOffsetMultiplier)
+        ? Math.max(1, options.leaderOffsetMultiplier)
+        : 1;
+      const leaderOffsetPx = unitSizePx * 0.25 * leaderOffsetMultiplier;
       const leaderTopLeftX = regularUpperRightX - unitSizePx + leaderOffsetPx;
       const leaderTopLeftY = regularUpperRightY + leaderOffsetPx;
       const leaderCenterX = leaderTopLeftX + unitSizePx / 2;
