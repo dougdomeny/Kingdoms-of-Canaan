@@ -256,6 +256,7 @@ main {
 }
 
 .unit {
+  --stack-size: 1;
   position: absolute;
   transform: translate(-50%, -50%);
   width: calc(0.75in * var(--map-zoom));
@@ -266,16 +267,35 @@ main {
   justify-content: center;
   line-height: 1;
   text-align: center;
-  border: 1px solid #3d2f1f;
+  border: 1px solid #000000;
   border-radius: 3px;
   background: #8ad4ff;
   color: #1a120a;
+  --stack-edge-offset: calc(0.03in * var(--map-zoom) * var(--stack-size));
+  box-shadow: 0 calc(0.015in * var(--map-zoom)) calc(0.01in * var(--map-zoom)) rgba(255, 255, 255, 0.4) inset;
   font-weight: 700;
   font-size: calc(0.235in * var(--map-zoom));
   cursor: grab;
   user-select: none;
   touch-action: none;
   z-index: 3;
+}
+
+.unit::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 100%;
+  width: 100%;
+  height: var(--stack-edge-offset);
+  background: repeating-linear-gradient(
+    to bottom,
+    #7a5a36 0,
+    #7a5a36 calc(0.015in * var(--map-zoom)),
+    #6a4f31 calc(0.015in * var(--map-zoom)),
+    #6a4f31 calc(0.03in * var(--map-zoom))
+  );
+  pointer-events: none;
 }
 
 .unit.has-image {
