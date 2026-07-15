@@ -359,6 +359,12 @@ main {
   background: #ecd39a;
 }
 
+.resolve-combat-button {
+  height: calc(0.3456in * var(--map-zoom));
+  display: inline-flex;
+  align-items: center;
+}
+
 .combat-dice-panel {
   position: absolute;
   display: grid;

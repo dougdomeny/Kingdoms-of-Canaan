@@ -184,6 +184,7 @@
 
   const configuredSpaceCentroids = new Map([
     [18, { x: 635, y: 870 }],
+    [22, { x: 493, y: 1056 }],
     [29, { x: 1000, y: 130 }]
   ]);
 
@@ -1061,6 +1062,10 @@
     return Boolean(unitType && unitType.classification === 'leader');
   }
 
+  function isRegularUnitType(unitType) {
+    return Boolean(unitType && !isLeaderUnitType(unitType) && !isChariotUnitType(unitType));
+  }
+
   function isChariotUnitType(unitType) {
     return Boolean(unitType && unitType.classification === 'chariot');
   }
@@ -1459,7 +1464,14 @@
         return false;
       }
 
-      return getUnitsInSpace(entry.spaceId).some((unit) => getUnitNation(unit) === entry.nation);
+      return getUnitsInSpace(entry.spaceId).some((unit) => {
+        if (getUnitNation(unit) !== entry.nation) {
+          return false;
+        }
+
+        const unitType = unitTypeById.get(unit.unitTypeId);
+        return isRegularUnitType(unitType);
+      });
     });
   }
 
@@ -1640,22 +1652,43 @@
       return null;
     }
 
+    const defenderUnits = getUnitsInSpace(spaceId).filter((unit) => {
+      const nation = getUnitNation(unit);
+      return canNationAttackDefender(attackerNation, nation);
+    });
+
+    if (!defenderUnits.length) {
+      state.pendingCombats = state.pendingCombats.filter(
+        (combat) => !(combat.spaceId === spaceId && combat.attackerNation === attackerNation)
+      );
+      return null;
+    }
+
     let pendingCombat = state.pendingCombats.find(
       (combat) => combat.spaceId === spaceId && combat.attackerNation === attackerNation
     );
 
     if (!pendingCombat) {
+      const singleDefenderNation = getSingleDefenderNation(attackerNation, defenderUnits);
+      if (singleDefenderNation && canDefenderSubmit(singleDefenderNation, attackerNation)) {
+        const shouldSubmit = window.confirm(
+          `${singleDefenderNation} may submit to ${attackerNation}. Submit now and become a vassal?`
+        );
+
+        if (shouldSubmit) {
+          applySubmission(singleDefenderNation, attackerNation);
+          markGarrisonRequired(spaceId, attackerNation);
+          setCombatStatus(`${singleDefenderNation} submitted to ${attackerNation}.`, 'success');
+          return null;
+        }
+      }
+
       pendingCombat = {
         id: `${spaceId}|${attackerNation}|${Date.now()}`,
         spaceId,
         attackerNation,
         attackerEntries: [],
-        defenderUnitIds: getUnitsInSpace(spaceId)
-          .filter((unit) => {
-            const nation = getUnitNation(unit);
-            return canNationAttackDefender(attackerNation, nation);
-          })
-          .map((unit) => unit.id),
+        defenderUnitIds: defenderUnits.map((unit) => unit.id),
         roundsResolved: 0
       };
       state.pendingCombats.push(pendingCombat);
@@ -1675,12 +1708,7 @@
       pendingCombat.defenderUnitIds = [];
     }
     if (!pendingCombat.defenderUnitIds.length) {
-      pendingCombat.defenderUnitIds = getUnitsInSpace(spaceId)
-        .filter((unit) => {
-          const nation = getUnitNation(unit);
-          return canNationAttackDefender(attackerNation, nation);
-        })
-        .map((unit) => unit.id);
+      pendingCombat.defenderUnitIds = defenderUnits.map((unit) => unit.id);
     }
 
     return pendingCombat;
@@ -2208,30 +2236,6 @@
     }
 
     const defenderNation = getDefenderNationName(attackerNation, defenderUnits);
-    const singleDefenderNation = getSingleDefenderNation(attackerNation, defenderUnits);
-
-    if (singleDefenderNation && canDefenderSubmit(singleDefenderNation, attackerNation)) {
-      const shouldSubmit = window.confirm(
-        `${singleDefenderNation} may submit to ${attackerNation}. Submit now and become a vassal?`
-      );
-
-      if (shouldSubmit) {
-        const submissionMessage = `${singleDefenderNation} submitted to ${attackerNation}.`;
-        applySubmission(singleDefenderNation, attackerNation);
-        combatDisplayBySpaceId.delete(spaceId);
-        removePendingCombat(pendingCombat.id);
-        return {
-          resolved: true,
-          reason: 'submission',
-          message: submissionMessage,
-          casualtiesRemoved: 0,
-          casualtyMessage: submissionMessage,
-          hiddenDiceMessage: '',
-          attackerStillPresent: true,
-          defendersStillPresent: true
-        };
-      }
-    }
 
     const defenderCombatUnitCount = getCombatUnitCountExcludingLeaders(defenderUnits);
     const attackerDiceUnits = getCappedAttackerDiceUnits(attackerUnits, defenderCombatUnitCount);
@@ -3748,8 +3752,10 @@
       }
 
       const unitType = unitTypeById.get(unit.unitTypeId);
+      const nationKey = getUnitNation(unit) || unit.unitTypeId;
+      const nationStackKey = `${unit.spaceId}|${nationKey}`;
       if (isChariotUnitType(unitType)) {
-        chariotStackSizes.set(unit.spaceId, (chariotStackSizes.get(unit.spaceId) || 0) + 1);
+        chariotStackSizes.set(nationStackKey, (chariotStackSizes.get(nationStackKey) || 0) + 1);
       } else if (!isLeaderUnitType(unitType)) {
         regularStackSizes.set(unit.spaceId, (regularStackSizes.get(unit.spaceId) || 0) + 1);
       }
@@ -3798,6 +3804,18 @@
 
       const hasSpace = unit.spaceId && spacesById.has(unit.spaceId);
       const groupKey = hasSpace ? `${unit.spaceId}|${nationKey}` : '';
+      let combatSide = '';
+      if (hasSpace) {
+        const pendingCombat = getPendingCombatForSpace(unit.spaceId);
+        if (pendingCombat) {
+          const unitNation = getUnitNation(unit);
+          if (unitNation === pendingCombat.attackerNation) {
+            combatSide = 'attacker';
+          } else if (canNationAttackDefender(pendingCombat.attackerNation, unitNation)) {
+            combatSide = 'defender';
+          }
+        }
+      }
       let stackIndex = 0;
       let stackSize = 1;
       const positionOptions = {
@@ -3805,7 +3823,8 @@
         anchorFromChariotStack: false,
         anchorStackIndex: 0,
         anchorStackSize: 1,
-        leaderOffsetMultiplier: 1
+        leaderOffsetMultiplier: 1,
+        combatSide
       };
 
       if (hasSpace) {
@@ -3828,9 +3847,9 @@
         }
 
         if (isChariot) {
-          stackIndex = chariotStackCounters.get(unit.spaceId) || 0;
-          stackSize = chariotStackSizes.get(unit.spaceId) || 1;
-          chariotStackCounters.set(unit.spaceId, stackIndex + 1);
+          stackIndex = chariotStackCounters.get(groupKey) || 0;
+          stackSize = chariotStackSizes.get(groupKey) || 1;
+          chariotStackCounters.set(groupKey, stackIndex + 1);
           chariotStackPositionByGroupKey.set(groupKey, { index: stackIndex, size: stackSize });
         } else if (!isLeader) {
           stackIndex = regularStackCounters.get(unit.spaceId) || 0;
@@ -3978,6 +3997,7 @@
       const resolveButton = document.createElement('button');
       resolveButton.type = 'button';
       resolveButton.className = 'combat-action-button';
+      resolveButton.classList.add('resolve-combat-button');
       resolveButton.textContent = 'Resolve Combat';
       resolveButton.disabled = !combatEnabled;
       resolveButton.style.left = `${buttonX}px`;
@@ -4014,6 +4034,12 @@
     const verticalOffset = centeredIndex * offsetStep;
     const unitType = unitTypeById.get(unit.unitTypeId);
     const unitSizePx = UNIT_SIZE_PX * state.zoom;
+    const combatSideOffsetPx = (unitSizePx * 0.6 + STACK_VERTICAL_GAP_PX * state.zoom) * 0.25;
+    const combatSideYOffset = options.combatSide === 'attacker'
+      ? -combatSideOffsetPx
+      : options.combatSide === 'defender'
+        ? combatSideOffsetPx
+        : 0;
 
     if (isChariotUnitType(unitType) && options.anchorFromRegularStack) {
       const anchorStackIndex = Number.isFinite(options.anchorStackIndex) ? options.anchorStackIndex : 0;
@@ -4024,7 +4050,14 @@
       const chariotOffsetPx = unitSizePx * 0.22;
 
       element.style.left = `${Math.round(regularCenterX + chariotOffsetPx)}px`;
-      element.style.top = `${Math.round(regularCenterY + chariotOffsetPx + verticalOffset)}px`;
+      element.style.top = `${Math.round(regularCenterY + chariotOffsetPx + verticalOffset + combatSideYOffset)}px`;
+      return;
+    }
+
+    if (isChariotUnitType(unitType)) {
+      const chariotOffsetPx = unitSizePx * 0.22;
+      element.style.left = `${Math.round(baseX * state.zoom + chariotOffsetPx)}px`;
+      element.style.top = `${Math.round(baseY * state.zoom + chariotOffsetPx + verticalOffset + combatSideYOffset)}px`;
       return;
     }
 
@@ -4046,12 +4079,12 @@
       const leaderCenterY = leaderTopLeftY + unitSizePx / 2;
 
       element.style.left = `${Math.round(leaderCenterX)}px`;
-      element.style.top = `${Math.round(leaderCenterY)}px`;
+      element.style.top = `${Math.round(leaderCenterY + combatSideYOffset)}px`;
       return;
     }
 
     element.style.left = `${Math.round(baseX * state.zoom)}px`;
-    element.style.top = `${Math.round(baseY * state.zoom + verticalOffset)}px`;
+    element.style.top = `${Math.round(baseY * state.zoom + verticalOffset + combatSideYOffset)}px`;
   }
 
   function onPointerMove(event) {
@@ -4093,6 +4126,7 @@
           const movingNation = getUnitNation(unit);
           const targetWasEmpty = getUnitsInSpace(targetSpace.id).length === 0;
           const movingFromSpaceId = unit.spaceId && spacesById.has(unit.spaceId) ? unit.spaceId : '';
+          let leftRegularUnitBehindForGarrison = false;
           if (movingFromSpaceId && targetSpace.id !== movingFromSpaceId && movingNation) {
             const nationUnitsAtOrigin = getUnitsInSpace(movingFromSpaceId).filter(
               (candidate) => getUnitNation(candidate) === movingNation
@@ -4106,18 +4140,21 @@
 
               // Shift-stack movement should automatically leave one required garrison unit behind.
               if (remainingAtOrigin < 1 && movingNationUnitCount > 0) {
-                const fallbackUnit = movingNationUnits[0];
                 const regularUnit = movingNationUnits.find((candidate) => {
                   const unitType = unitTypeById.get(candidate.unitTypeId);
-                  return !isLeaderUnitType(unitType) && !isChariotUnitType(unitType);
+                  return isRegularUnitType(unitType);
                 });
-                const nonLeaderUnit = movingNationUnits.find((candidate) => {
-                  const unitType = unitTypeById.get(candidate.unitTypeId);
-                  return !isLeaderUnitType(unitType);
-                });
-                const unitToLeave = regularUnit || nonLeaderUnit || fallbackUnit;
+                const unitToLeave = regularUnit || null;
                 if (unitToLeave) {
                   movedUnits = movedUnits.filter((candidate) => candidate.id !== unitToLeave.id);
+                  leftRegularUnitBehindForGarrison = true;
+                } else {
+                  setCombatStatus('A required garrison must be a regular unit. Leave a regular unit behind before moving on.', 'error', 6500);
+                  dragState.element.classList.remove('dragging');
+                  dragState = null;
+                  renderUnits();
+                  saveState();
+                  return;
                 }
               }
 
@@ -4137,7 +4174,7 @@
                   (candidate) => getUnitNation(candidate) === movingNation && !movedUnitIds.has(candidate.id)
                 );
 
-                if (!remainingLeaderCompanions.length && !sameNationInTarget) {
+                if (!remainingLeaderCompanions.length && !sameNationInTarget && !leftRegularUnitBehindForGarrison) {
                   setCombatStatus('A leader cannot move alone. Leave the leader in place or move another unit with it.', 'error', 6000);
                   dragState.element.classList.remove('dragging');
                   dragState = null;
