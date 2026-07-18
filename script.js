@@ -1447,11 +1447,21 @@
       return false;
     }
 
+    const space = spacesById.get(spaceId);
+    if (space && getSpaceGrowthValue(space) <= 0) {
+      return false;
+    }
+
     return state.requiredGarrisons.some((entry) => entry.spaceId === spaceId && entry.nation === nation);
   }
 
   function markGarrisonRequired(spaceId, nation) {
     if (!spaceId || !nation || isGarrisonRequired(spaceId, nation)) {
+      return;
+    }
+
+    const space = spacesById.get(spaceId);
+    if (space && getSpaceGrowthValue(space) <= 0) {
       return;
     }
 
@@ -1461,6 +1471,11 @@
   function cleanGarrisonRequirements() {
     state.requiredGarrisons = state.requiredGarrisons.filter((entry) => {
       if (!entry.spaceId || !entry.nation || !spacesById.has(entry.spaceId)) {
+        return false;
+      }
+
+      const space = spacesById.get(entry.spaceId);
+      if (space && getSpaceGrowthValue(space) <= 0) {
         return false;
       }
 
@@ -3167,7 +3182,58 @@
 
     const currentSpace = spacesById.get(unit.spaceId);
     const allowedNeighbors = adjacentSpaceLookup.get(currentSpace.index);
-    return Boolean(allowedNeighbors && allowedNeighbors.has(targetSpace.index));
+    if (allowedNeighbors && allowedNeighbors.has(targetSpace.index)) {
+      return true;
+    }
+
+    return canReachSpaceThroughFriendlyPath(currentSpace, targetSpace, unitNation);
+  }
+
+  function isFriendlyPathSpaceForNation(spaceId, nationName) {
+    const unitsInSpace = getUnitsInSpace(spaceId);
+    if (!unitsInSpace.length) {
+      return false;
+    }
+
+    return unitsInSpace.every((unit) => getUnitNation(unit) === nationName);
+  }
+
+  function canReachSpaceThroughFriendlyPath(startSpace, targetSpace, nationName) {
+    if (!startSpace || !targetSpace || !nationName) {
+      return false;
+    }
+
+    if (startSpace.id === targetSpace.id) {
+      return true;
+    }
+
+    const visited = new Set([startSpace.id]);
+    const queue = [startSpace];
+
+    while (queue.length) {
+      const current = queue.shift();
+      const neighbors = adjacentSpaceLookup.get(current.index) || new Set();
+
+      for (const neighborIndex of neighbors) {
+        const nextSpace = findSpaceByIndex(neighborIndex);
+        if (!nextSpace || visited.has(nextSpace.id)) {
+          continue;
+        }
+
+        if (!isFriendlyPathSpaceForNation(nextSpace.id, nationName)) {
+          continue;
+        }
+
+        if (nextSpace.id === targetSpace.id) {
+          return true;
+        }
+
+        visited.add(nextSpace.id);
+        queue.push(nextSpace);
+      }
+    }
+
+    return false;
   }
 
   function renderAdjacencyLines() {
@@ -4158,7 +4224,9 @@
                 }
               }
 
-              const movingLeader = movedUnits.find((candidate) => candidate.id === unit.id);
+              const movingLeader = isLeaderUnitType(unitTypeById.get(unit.unitTypeId))
+                ? movedUnits.find((candidate) => candidate.id === unit.id)
+                : null;
               if (movingLeader) {
                 const remainingLeaderCompanions = movedUnits.filter((candidate) => {
                   if (candidate.id === unit.id) {
