@@ -185,11 +185,31 @@ main {
   cursor: pointer;
 }
 
+#skip-turn {
+  border: 1px solid #5b4f34;
+  border-radius: 0.35rem;
+  background: #e7d8ad;
+  color: #332714;
+  font-size: 0.86rem;
+  font-weight: 700;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+}
+
 #next-phase:hover:not(:disabled) {
   background: #c2d199;
 }
 
+#skip-turn:hover:not(:disabled) {
+  background: #dccb97;
+}
+
 #next-phase:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+#skip-turn:disabled {
   opacity: 0.65;
   cursor: default;
 }

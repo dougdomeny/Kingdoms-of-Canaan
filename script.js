@@ -24,6 +24,7 @@
   const currentPhaseLabel = document.getElementById('current-phase');
   const phaseHelpLabel = document.getElementById('phase-help');
   const nextPhaseButton = document.getElementById('next-phase');
+  const skipTurnButton = document.getElementById('skip-turn');
   const currentNationLabel = document.getElementById('current-nation');
   const resetGameButton = document.getElementById('reset-game');
   const combatStatusLabel = document.getElementById('combat-status');
@@ -185,7 +186,8 @@
   const configuredSpaceCentroids = new Map([
     [18, { x: 635, y: 870 }],
     [22, { x: 493, y: 1056 }],
-    [29, { x: 1000, y: 130 }]
+    [29, { x: 1000, y: 130 }],
+    [30, { x: 968, y: 860 }]
   ]);
 
   const UNIT_IMAGE_FILES = [
@@ -990,7 +992,11 @@
 
   function hasScheduledNationEntryForTurn(turn, nationEntry) {
     if (!nationEntry || state.spawnedLeaderTurns.includes(turn)) {
-      return false;
+      return turn === 3 && !state.spawnedReinforcementTurns.includes(3) && nationEntry.nations.has('Philistia');
+    }
+
+    if (turn === 3 && !state.spawnedReinforcementTurns.includes(3) && nationEntry.nations.has('Philistia')) {
+      return true;
     }
 
     const scheduledLeader = getScheduledLeaderSpec(turn);
@@ -1340,7 +1346,15 @@
     const preferredSpaces = controlledSpaces
       .map((spaceId) => spacesById.get(spaceId))
       .filter(Boolean)
-      .filter((space) => (requireNonHill ? !isHillSpace(space) : true));
+      .filter((space) => (requireNonHill ? !isHillSpace(space) : true))
+      .sort((first, second) => {
+        const growthDifference = getSpaceGrowthValue(second) - getSpaceGrowthValue(first);
+        if (growthDifference !== 0) {
+          return growthDifference;
+        }
+
+        return first.index - second.index;
+      });
 
     if (preferredSpaces.length) {
       return preferredSpaces;
@@ -1363,7 +1377,14 @@
       deduped.push(space);
     });
 
-    return deduped.sort((first, second) => first.index - second.index);
+    return deduped.sort((first, second) => {
+      const growthDifference = getSpaceGrowthValue(second) - getSpaceGrowthValue(first);
+      if (growthDifference !== 0) {
+        return growthDifference;
+      }
+
+      return first.index - second.index;
+    });
   }
 
   function syncUnitCounts() {
@@ -1415,6 +1436,11 @@
               ? `Advance to ${NATION_ORDER[nextPlayable.nationIndex].label} Turn`
               : 'Finish Game'
             : phase.nextLabel;
+    }
+
+    if (skipTurnButton) {
+      skipTurnButton.disabled = state.gameComplete;
+      skipTurnButton.textContent = state.gameComplete ? 'Game Complete' : 'Skip Turn';
     }
   }
 
@@ -1836,26 +1862,32 @@
 
   function buildCombatDice(units, space, hasLeaderSupport = false) {
     const chariotEffects = [];
-    const dice = units.map((unit) => {
+    const dice = units.flatMap((unit) => {
       const unitType = unitTypeById.get(unit.unitTypeId);
-      const baseRoll = Math.floor(Math.random() * 6) + 1;
       const terrainModifier = getTerrainCombatModifier(unitType, space);
-      const modifiedRoll = baseRoll + terrainModifier;
-      const value = terrainModifier > 0 ? modifiedRoll : clampCombatDie(modifiedRoll);
-      if (terrainModifier !== 0 && unitType && unitType.classification === 'chariot') {
-        chariotEffects.push({
-          unitName: unitType.displayName,
-          before: baseRoll,
-          after: value,
-          modifier: terrainModifier
-        });
-      }
+      const isChariot = Boolean(unitType && unitType.classification === 'chariot');
+      const rollCount = isChariot ? 2 : 1;
 
-      return {
-        unitId: unit.id,
-        unitName: unitType ? unitType.displayName : unit.label,
-        value
-      };
+      return Array.from({ length: rollCount }, (_, rollIndex) => {
+        const baseRoll = Math.floor(Math.random() * 6) + 1;
+        const modifiedRoll = baseRoll + terrainModifier;
+        const value = terrainModifier > 0 ? modifiedRoll : clampCombatDie(modifiedRoll);
+        if (terrainModifier !== 0 && isChariot) {
+          chariotEffects.push({
+            unitName: unitType.displayName,
+            before: baseRoll,
+            after: value,
+            modifier: terrainModifier,
+            rollNumber: rollIndex + 1
+          });
+        }
+
+        return {
+          unitId: unit.id,
+          unitName: unitType ? unitType.displayName : unit.label,
+          value
+        };
+      });
     });
 
     let leaderEffect = null;
@@ -1895,7 +1927,7 @@
       return [];
     }
 
-    const maxAttackerDiceUnits = Math.max(1, defenderCount * 4);
+      const maxAttackerDiceUnits = Math.max(1, defenderCount * 3);
     const nonLeaders = attackerUnits.filter((unit) => {
       const unitType = unitTypeById.get(unit.unitTypeId);
       return !isLeaderUnitType(unitType);
@@ -2016,7 +2048,8 @@
       .map((effect) => {
         const direction = effect.modifier > 0 ? 'bonus' : 'penalty';
         const signedModifier = effect.modifier > 0 ? `+${effect.modifier}` : String(effect.modifier);
-        return `${effect.unitName} ${direction} ${signedModifier} (${effect.before} to ${effect.after})`;
+        const rollLabel = Number.isFinite(effect.rollNumber) ? ` roll ${effect.rollNumber}` : '';
+        return `${effect.unitName}${rollLabel} ${direction} ${signedModifier} (${effect.before} to ${effect.after})`;
       })
       .join('; ');
 
@@ -2765,6 +2798,8 @@
   }
 
   function getGrowthPlacementSpaceWithinCap(placementSpaces, addedUnitsBySpaceId) {
+    let lowestAddedCount = Number.POSITIVE_INFINITY;
+
     for (const space of placementSpaces) {
       const growthCap = getSpaceGrowthValue(space);
       if (growthCap <= 0) {
@@ -2773,6 +2808,22 @@
 
       const addedSoFar = addedUnitsBySpaceId.get(space.id) || 0;
       if (addedSoFar < growthCap) {
+        lowestAddedCount = Math.min(lowestAddedCount, addedSoFar);
+      }
+    }
+
+    if (!Number.isFinite(lowestAddedCount)) {
+      return null;
+    }
+
+    for (const space of placementSpaces) {
+      const growthCap = getSpaceGrowthValue(space);
+      if (growthCap <= 0) {
+        continue;
+      }
+
+      const addedSoFar = addedUnitsBySpaceId.get(space.id) || 0;
+      if (addedSoFar === lowestAddedCount && addedSoFar < growthCap) {
         return space;
       }
     }
@@ -2901,6 +2952,10 @@
       return;
     }
 
+    if (!isNationActive('Philistia')) {
+      return;
+    }
+
     const spawnedUnits = [];
     const reinforcementSpecs = [
       { unitTypeId: 'philistia', count: 3 },
@@ -3001,9 +3056,9 @@
     }
   }
 
-  function advanceTurnPhase() {
+  function stepTurnPhase() {
     if (state.gameComplete) {
-      return;
+      return false;
     }
 
     const phase = getCurrentPhase();
@@ -3039,10 +3094,44 @@
       }
     }
 
+    return true;
+  }
+
+  function finalizeTurnPhaseAdvance() {
     syncTurnState();
     renderUnits();
     updateTurnPhaseUi();
     saveState();
+  }
+
+  function advanceTurnPhase() {
+    if (!stepTurnPhase()) {
+      return;
+    }
+
+    finalizeTurnPhaseAdvance();
+  }
+
+  function skipTurn() {
+    if (state.gameComplete) {
+      return;
+    }
+
+    const startingTurn = state.currentTurn;
+    const startingNationIndex = state.currentNationIndex;
+
+    while (!state.gameComplete) {
+      const advanced = stepTurnPhase();
+      if (!advanced) {
+        break;
+      }
+
+      if (state.currentTurn !== startingTurn || state.currentNationIndex !== startingNationIndex) {
+        break;
+      }
+    }
+
+    finalizeTurnPhaseAdvance();
   }
 
   function updateMouseCoordsText(sourceX, sourceY) {
@@ -4441,6 +4530,10 @@
 
   if (nextPhaseButton) {
     nextPhaseButton.addEventListener('click', advanceTurnPhase);
+  }
+
+  if (skipTurnButton) {
+    skipTurnButton.addEventListener('click', skipTurn);
   }
 
   syncMapSize();
