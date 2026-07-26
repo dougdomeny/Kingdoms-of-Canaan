@@ -101,7 +101,7 @@
     ['Shechem', { growth: 1, terrain: 'standard' }],
     ['Shephela', { growth: 2, terrain: 'standard' }],
     ['Bethel', { growth: 1, terrain: 'hills' }],
-    ['Jerusalem', { growth: 1, terrain: 'city' }],
+    ['Jerusalem', { growth: 1, terrain: 'hills' }],
     ['Bethlehem', { growth: 1, terrain: 'hills' }],
     ['Benjamin', { growth: 1, terrain: 'hills' }],
     ['Jericho', { growth: 1, terrain: 'plains' }],
@@ -110,7 +110,7 @@
     ['Negev', { growth: 0, terrain: 'desert' }],
     ['Bashan', { growth: 1, terrain: 'standard' }],
     ['Geshur', { growth: 1, terrain: 'standard' }],
-    ['Argob', { growth: 1, terrain: 'standard' }],
+    ['Argob', { growth: 0, terrain: 'standard' }],
     ['Gilead', { growth: 2, terrain: 'standard' }],
     ['Jazer', { growth: 1, terrain: 'hills' }],
     ['Ammon', { growth: 1, terrain: 'standard' }],
@@ -119,6 +119,9 @@
     ['Valley of Siddim', { growth: 0, terrain: 'desert' }],
     ['Edom', { growth: 1, terrain: 'standard' }],
     ['Eastern Desert', { growth: 0, terrain: 'desert' }]
+  ]);
+  const REGION_TERRAIN_OVERRIDES_BY_INDEX = new Map([
+    [1, 'standard']
   ]);
   const UNIT_GROWTH_THRESHOLD = 3;
   const CHARIOT_GROWTH_THRESHOLD = 5;
@@ -1211,6 +1214,11 @@
   }
 
   function getSpaceTerrain(space) {
+    const terrainOverride = space ? REGION_TERRAIN_OVERRIDES_BY_INDEX.get(space.index) : null;
+    if (terrainOverride) {
+      return terrainOverride;
+    }
+
     const baseName = getSpaceBaseName(space);
     const regionRules = REGION_RULES_BY_NAME.get(baseName);
     return regionRules ? regionRules.terrain : 'standard';
@@ -1250,7 +1258,7 @@
   function getSpaceMarkerSuffix(space) {
     const growth = getSpaceGrowthValue(space);
     const terrainCode = getSpaceTerrainCode(space);
-    return terrainCode ? `${terrainCode}${growth}` : String(growth);
+    return terrainCode ? `${growth}${terrainCode}` : String(growth);
   }
 
   function getNationUnitTypeForGrowth(nationName, classification) {
@@ -3687,6 +3695,14 @@
     spaces.forEach((space) => {
       const override = configuredSpaceCentroids.get(space.index);
       if (!override) {
+        if (space.index === 20) {
+          space.centroidX -= 20;
+          space.centroidY -= 20;
+          space.minX = Math.min(space.minX, space.centroidX);
+          space.minY = Math.min(space.minY, space.centroidY);
+          space.maxX = Math.max(space.maxX, space.centroidX);
+          space.maxY = Math.max(space.maxY, space.centroidY);
+        }
         return;
       }
 
@@ -3696,6 +3712,15 @@
       space.minY = Math.min(space.minY, override.y);
       space.maxX = Math.max(space.maxX, override.x);
       space.maxY = Math.max(space.maxY, override.y);
+
+      if (space.index === 20) {
+        space.centroidX -= 20;
+        space.centroidY -= 20;
+        space.minX = Math.min(space.minX, space.centroidX);
+        space.minY = Math.min(space.minY, space.centroidY);
+        space.maxX = Math.max(space.maxX, space.centroidX);
+        space.maxY = Math.max(space.maxY, space.centroidY);
+      }
     });
   }
 
