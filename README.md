@@ -18,3 +18,25 @@ python -m http.server 4173
 ```
 
 Then open `http://127.0.0.1:4173` in your browser.
+
+## AI Balance Baseline (Par Scores)
+
+The following table is based on 100 automated AI-only playthroughs to Turn 9.
+Each value is the average final VP for that nation and can be used as a balancing par target.
+
+| Nation | Average VP (100 runs) |
+| --- | ---: |
+| Hebrew | 18.95 |
+| Canaan | 58.07 |
+| Amorite | 20.14 |
+| Ammon | 5.20 |
+| Moab | 4.69 |
+| Edom | 9.98 |
+| Phoenicia | 10.70 |
+| Philistia | 20.22 |
+| Israel | 23.94 |
+| Judah | 12.78 |
+| Egypt | 0.56 |
+| Aram-Syria | 0.69 |
+| Assyria | 0.42 |
+| Babylonia | 0.69 |

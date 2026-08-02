@@ -196,12 +196,27 @@ main {
   cursor: pointer;
 }
 
+#run-ai-turn {
+  border: 1px solid #27425f;
+  border-radius: 0.35rem;
+  background: #c7deef;
+  color: #173046;
+  font-size: 0.86rem;
+  font-weight: 700;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+}
+
 #next-phase:hover:not(:disabled) {
   background: #c2d199;
 }
 
 #skip-turn:hover:not(:disabled) {
   background: #dccb97;
+}
+
+#run-ai-turn:hover:not(:disabled) {
+  background: #b3d2e8;
 }
 
 #next-phase:disabled {
@@ -214,8 +229,80 @@ main {
   cursor: default;
 }
 
+#run-ai-turn:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
 #reset-game:hover {
   background: #e5d5ac;
+}
+
+.vp-panel {
+  width: 100%;
+  border: 1px solid #8d7758;
+  border-radius: 0.45rem;
+  background: rgba(255, 245, 210, 0.72);
+  padding: 0.35rem 0.55rem;
+}
+
+.vp-panel summary {
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: #3a2a18;
+}
+
+#vp-table {
+  margin-top: 0.45rem;
+  font-size: 0.83rem;
+  color: #473624;
+}
+
+.vp-standings {
+  margin: 0;
+  padding-left: 1rem;
+}
+
+.vp-standings li {
+  margin: 0.14rem 0;
+}
+
+.vp-log-hint {
+  margin: 0.4rem 0 0;
+  color: #685544;
+  font-size: 0.78rem;
+}
+
+.vp-turn-history-wrap {
+  margin-top: 0.5rem;
+  overflow-x: auto;
+}
+
+.vp-turn-history {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  background: rgba(255, 249, 228, 0.65);
+}
+
+.vp-turn-history th,
+.vp-turn-history td {
+  border: 1px solid rgba(109, 84, 57, 0.45);
+  padding: 0.18rem 0.34rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.vp-turn-history th[scope="row"] {
+  text-align: left;
+  position: sticky;
+  left: 0;
+  background: rgba(255, 240, 208, 0.95);
+}
+
+.vp-turn-history thead th {
+  background: rgba(236, 218, 180, 0.9);
 }
 
 #map-viewport {

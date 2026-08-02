@@ -25,9 +25,12 @@
   const phaseHelpLabel = document.getElementById('phase-help');
   const nextPhaseButton = document.getElementById('next-phase');
   const skipTurnButton = document.getElementById('skip-turn');
+  const runAiTurnButton = document.getElementById('run-ai-turn');
   const currentNationLabel = document.getElementById('current-nation');
   const resetGameButton = document.getElementById('reset-game');
   const combatStatusLabel = document.getElementById('combat-status');
+  const vpSummaryLabel = document.getElementById('vp-summary');
+  const vpTable = document.getElementById('vp-table');
 
   const TOTAL_TURNS = 9;
   const HEBREW_DIVISION_TRIGGER_TURN = 5;
@@ -87,6 +90,22 @@
   ]);
 
   const invaderNations = new Set(['Egypt', 'Aram-Syria', 'Assyria', 'Assyrria', 'Babylonia']);
+  const VP_OBJECTIVE_NATIONS = [
+    'Hebrew',
+    'Canaan',
+    'Amorite',
+    'Ammon',
+    'Moab',
+    'Edom',
+    'Phoenicia',
+    'Philistia',
+    'Israel',
+    'Judah',
+    'Egypt',
+    'Aram-Syria',
+    'Assyria',
+    'Babylonia'
+  ];
   const REGION_RULES_BY_NAME = new Map([
     ['Dan', { growth: 1, terrain: 'standard' }],
     ['Phoenicia', { growth: 2, terrain: 'plains' }],
@@ -329,6 +348,12 @@
     requiredGarrisons: [],
     retreatedUnitIds: [],
     activatedUnitIds: [],
+    vpByNation: {},
+    vpLog: [],
+    vpScoredKeys: [],
+    vpRegionAwardedTurns: [],
+    vpNationTurnBaseline: {},
+    vpSeenNations: [],
     hebrewDivisionResolved: false,
     gameComplete: false,
     unitCounts: {
@@ -623,6 +648,12 @@
       const requiredGarrisons = normalizeRequiredGarrisons(parsed.requiredGarrisons);
       const retreatedUnitIds = normalizeUniqueStringList(parsed.retreatedUnitIds);
       const activatedUnitIds = normalizeUniqueStringList(parsed.activatedUnitIds);
+      const vpByNation = normalizeStringNumberMap(parsed.vpByNation);
+      const vpLog = normalizeVpLog(parsed.vpLog);
+      const vpScoredKeys = normalizeUniqueStringList(parsed.vpScoredKeys);
+      const vpRegionAwardedTurns = normalizeUniqueTurnList(parsed.vpRegionAwardedTurns);
+      const vpNationTurnBaseline = normalizeStringNumberMap(parsed.vpNationTurnBaseline);
+      const vpSeenNations = normalizeUniqueStringList(parsed.vpSeenNations);
 
       return {
         zoom,
@@ -643,6 +674,12 @@
         requiredGarrisons,
         retreatedUnitIds,
         activatedUnitIds,
+        vpByNation,
+        vpLog,
+        vpScoredKeys,
+        vpRegionAwardedTurns,
+        vpNationTurnBaseline,
+        vpSeenNations,
         hebrewDivisionResolved: Boolean(parsed.hebrewDivisionResolved),
         gameComplete: Boolean(parsed.gameComplete),
         unitCounts,
@@ -926,6 +963,71 @@
     });
 
     return normalized;
+  }
+
+  function normalizeStringNumberMap(value) {
+    const normalized = {};
+    if (!value || typeof value !== 'object') {
+      return normalized;
+    }
+
+    Object.entries(value).forEach(([key, rawValue]) => {
+      const normalizedKey = String(key || '').trim();
+      if (!normalizedKey) {
+        return;
+      }
+
+      const parsed = sanitizeInteger(rawValue, -9999, 9999, 0);
+      normalized[normalizedKey] = parsed;
+    });
+
+    return normalized;
+  }
+
+  function normalizeVpLog(value) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') {
+          return null;
+        }
+
+        const nation = String(entry.nation || '').trim();
+        const type = String(entry.type || '').trim();
+        const label = String(entry.label || '').trim();
+        const key = String(entry.key || '').trim();
+        if (!nation || !type) {
+          return null;
+        }
+
+        return {
+          id: String(entry.id || `${entry.turn || 0}|${nation}|${type}|${key || label}`),
+          key,
+          nation,
+          points: sanitizeInteger(entry.points, -9999, 9999, 0),
+          turn: sanitizeInteger(entry.turn, 0, TOTAL_TURNS, 0),
+          type,
+          label
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function normalizeUniqueTurnList(value) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return Array.from(
+      new Set(
+        value
+          .map((entry) => sanitizeInteger(entry, 1, TOTAL_TURNS, 0))
+          .filter((entry) => entry > 0)
+      )
+    ).sort((first, second) => first - second);
   }
 
   function adjustUnitTypeCount(unitTypeId, delta) {
@@ -1348,6 +1450,422 @@
     return landPoints;
   }
 
+  function normalizeNationForVp(nationName) {
+    if (!nationName) {
+      return '';
+    }
+
+    const ai = getAiEngine();
+    if (ai && typeof ai.normalizeNationName === 'function') {
+      return ai.normalizeNationName(nationName);
+    }
+
+    if (nationName === 'Assyrria') {
+      return 'Assyria';
+    }
+
+    return nationName;
+  }
+
+  function getNationObjectiveProfile(nationName) {
+    const ai = getAiEngine();
+    if (!ai || typeof ai.getObjectiveProfile !== 'function') {
+      return null;
+    }
+
+    return ai.getObjectiveProfile(nationName);
+  }
+
+  function resolveObjectiveSpaceName(spaceName) {
+    if (!spaceName) {
+      return '';
+    }
+
+    const names = new Set(detectedSpaces.map((space) => space.name));
+    if (names.has(spaceName)) {
+      return spaceName;
+    }
+
+    const ai = getAiEngine();
+    if (ai && typeof ai.resolveSpaceName === 'function') {
+      return ai.resolveSpaceName(spaceName, names) || '';
+    }
+
+    return '';
+  }
+
+  function addVp(nationName, points, type, label, turn, scoreKey = '') {
+    const nation = normalizeNationForVp(nationName);
+    const parsedPoints = sanitizeInteger(points, -9999, 9999, 0);
+    if (!nation || !parsedPoints) {
+      return false;
+    }
+
+    if (scoreKey) {
+      if (state.vpScoredKeys.includes(scoreKey)) {
+        return false;
+      }
+      state.vpScoredKeys = [...state.vpScoredKeys, scoreKey];
+    }
+
+    state.vpByNation[nation] = (state.vpByNation[nation] || 0) + parsedPoints;
+    state.vpLog.push({
+      id: `${Date.now()}|${nation}|${type}|${Math.random().toString(36).slice(2, 8)}`,
+      key: scoreKey,
+      nation,
+      points: parsedPoints,
+      turn: sanitizeInteger(turn, 0, TOTAL_TURNS, 0),
+      type,
+      label: String(label || '').trim()
+    });
+
+    return true;
+  }
+
+  function getControlledRegionCountsByNation() {
+    const controlled = getControlledSpacesByNation();
+    const counts = {};
+
+    controlled.forEach((spaceIds, nationName) => {
+      const normalizedNation = normalizeNationForVp(nationName);
+      counts[normalizedNation] = (counts[normalizedNation] || 0) + spaceIds.length;
+    });
+
+    return counts;
+  }
+
+  function getControlledSpacesByNationNormalized() {
+    const controlled = getControlledSpacesByNation();
+    const normalized = new Map();
+
+    controlled.forEach((spaceIds, nationName) => {
+      const normalizedNation = normalizeNationForVp(nationName);
+      if (!normalized.has(normalizedNation)) {
+        normalized.set(normalizedNation, []);
+      }
+
+      normalized.get(normalizedNation).push(...spaceIds);
+    });
+
+    return normalized;
+  }
+
+  function nationControlsObjectiveSpace(nationName, targetSpaceName, normalizedControlledSpaces) {
+    const nationSpaceIds = normalizedControlledSpaces.get(normalizeNationForVp(nationName)) || [];
+    return nationSpaceIds.some((spaceId) => {
+      const space = spacesById.get(spaceId);
+      return space && getSpaceBaseName(space) === targetSpaceName;
+    });
+  }
+
+  function updateVpSeenNations() {
+    const seen = new Set(state.vpSeenNations || []);
+    state.units.forEach((unit) => {
+      const nation = normalizeNationForVp(getUnitNation(unit));
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      if (!nation || !unitType || isLeaderUnitType(unitType)) {
+        return;
+      }
+
+      seen.add(nation);
+    });
+
+    state.vpSeenNations = Array.from(seen).sort();
+  }
+
+  function recordVpNationTurnBaseline() {
+    const counts = getControlledRegionCountsByNation();
+    const keyPrefix = `${state.currentTurn}:${state.currentNationIndex}`;
+    getActiveNationNames().forEach((nationName) => {
+      const normalizedNation = normalizeNationForVp(nationName);
+      const key = `${keyPrefix}|${normalizedNation}`;
+      if (Object.prototype.hasOwnProperty.call(state.vpNationTurnBaseline, key)) {
+        return;
+      }
+
+      state.vpNationTurnBaseline[key] = counts[normalizedNation] || 0;
+    });
+  }
+
+  function scorePersistentControlObjectives(turn) {
+    const normalizedControlledSpaces = getControlledSpacesByNationNormalized();
+
+    VP_OBJECTIVE_NATIONS.forEach((nationName) => {
+      const profile = getNationObjectiveProfile(nationName);
+      if (!profile || !profile.controlSpaces) {
+        return;
+      }
+
+      Object.entries(profile.controlSpaces).forEach(([objectiveSpaceName, points]) => {
+        const resolvedSpaceName = resolveObjectiveSpaceName(objectiveSpaceName);
+        if (!resolvedSpaceName) {
+          return;
+        }
+
+        if (!nationControlsObjectiveSpace(nationName, resolvedSpaceName, normalizedControlledSpaces)) {
+          return;
+        }
+
+        addVp(
+          nationName,
+          points,
+          'objective-control',
+          `${nationName} controls ${resolvedSpaceName}`,
+          turn,
+          `objective|control|${normalizeNationForVp(nationName)}|${resolvedSpaceName}`
+        );
+      });
+    });
+  }
+
+  function scoreLeaderObjectivesForCurrentTurn(turn) {
+    const normalizedControlledSpaces = getControlledSpacesByNationNormalized();
+
+    VP_OBJECTIVE_NATIONS.forEach((nationName) => {
+      const profile = getNationObjectiveProfile(nationName);
+      const leaderObjectives = profile && profile.leaderObjectivesByTurn
+        ? profile.leaderObjectivesByTurn[turn]
+        : null;
+      if (!leaderObjectives || !leaderObjectives.controlSpaces) {
+        return;
+      }
+
+      Object.entries(leaderObjectives.controlSpaces).forEach(([objectiveSpaceName, points]) => {
+        const resolvedSpaceName = resolveObjectiveSpaceName(objectiveSpaceName);
+        if (!resolvedSpaceName) {
+          return;
+        }
+
+        if (!nationControlsObjectiveSpace(nationName, resolvedSpaceName, normalizedControlledSpaces)) {
+          return;
+        }
+
+        addVp(
+          nationName,
+          points,
+          'objective-leader',
+          `${nationName} leader objective at Turn ${turn}: ${resolvedSpaceName}`,
+          turn,
+          `objective|leader|${normalizeNationForVp(nationName)}|turn:${turn}|${resolvedSpaceName}`
+        );
+      });
+    });
+  }
+
+  function scoreEliminationObjectives(turn) {
+    VP_OBJECTIVE_NATIONS.forEach((nationName) => {
+      const profile = getNationObjectiveProfile(nationName);
+      if (!profile || !profile.eliminateNations) {
+        return;
+      }
+
+      Object.entries(profile.eliminateNations).forEach(([targetNation, points]) => {
+        const normalizedTarget = normalizeNationForVp(targetNation);
+        if (!state.vpSeenNations.includes(normalizedTarget)) {
+          return;
+        }
+
+        if (getUnitCountByNation(normalizedTarget) > 0) {
+          return;
+        }
+
+        addVp(
+          nationName,
+          points,
+          'objective-eliminate',
+          `${nationName} eliminated ${normalizedTarget}`,
+          turn,
+          `objective|eliminate|${normalizeNationForVp(nationName)}|${normalizedTarget}`
+        );
+      });
+    });
+  }
+
+  function scoreReplaceControlObjectivesForActiveNation(turn) {
+    const counts = getControlledRegionCountsByNation();
+    const keyPrefix = `${state.currentTurn}:${state.currentNationIndex}`;
+
+    getActiveNationNames().forEach((nationName) => {
+      const normalizedNation = normalizeNationForVp(nationName);
+      const profile = getNationObjectiveProfile(normalizedNation);
+      if (!profile || !profile.replaceControl) {
+        return;
+      }
+
+      const baselineKey = `${keyPrefix}|${normalizedNation}`;
+      const baseline = state.vpNationTurnBaseline[baselineKey] || 0;
+      const gained = (counts[normalizedNation] || 0) - baseline;
+      if (gained < profile.replaceControl) {
+        return;
+      }
+
+      addVp(
+        normalizedNation,
+        profile.replaceControl,
+        'objective-replace',
+        `${normalizedNation} replaced ${profile.replaceControl} region${profile.replaceControl === 1 ? '' : 's'} this turn`,
+        turn,
+        `objective|replace|${normalizedNation}`
+      );
+    });
+  }
+
+  function scoreSurvivalObjectives(turn) {
+    VP_OBJECTIVE_NATIONS.forEach((nationName) => {
+      const profile = getNationObjectiveProfile(nationName);
+      if (!profile || !profile.surviveToTurn) {
+        return;
+      }
+
+      const thresholdTurn = sanitizeInteger(profile.surviveToTurn.turn, 1, TOTAL_TURNS, 0);
+      if (turn < thresholdTurn) {
+        return;
+      }
+
+      if (getUnitCountByNation(normalizeNationForVp(nationName)) <= 0) {
+        return;
+      }
+
+      addVp(
+        nationName,
+        profile.surviveToTurn.points,
+        'objective-survive',
+        `${nationName} survived to Turn ${thresholdTurn}`,
+        turn,
+        `objective|survive|${normalizeNationForVp(nationName)}`
+      );
+    });
+  }
+
+  function awardRegionVpForTurn(turn) {
+    const normalizedTurn = sanitizeInteger(turn, 1, TOTAL_TURNS, 0);
+    if (!normalizedTurn || state.vpRegionAwardedTurns.includes(normalizedTurn)) {
+      return;
+    }
+
+    const regionCounts = getControlledRegionCountsByNation();
+    Object.entries(regionCounts).forEach(([nationName, count]) => {
+      const points = sanitizeInteger(count, 0, 9999, 0);
+      if (points <= 0) {
+        return;
+      }
+
+      addVp(
+        nationName,
+        points,
+        'region-turn',
+        `${nationName} region VP at end of Turn ${normalizedTurn}`,
+        normalizedTurn,
+        `region|${normalizedTurn}|${nationName}`
+      );
+    });
+
+    state.vpRegionAwardedTurns = [...state.vpRegionAwardedTurns, normalizedTurn].sort((a, b) => a - b);
+  }
+
+  function getVpBreakdownByNation() {
+    const breakdown = {};
+
+    state.vpLog.forEach((entry) => {
+      const nation = normalizeNationForVp(entry.nation);
+      if (!breakdown[nation]) {
+        breakdown[nation] = {
+          region: 0,
+          objective: 0,
+          total: 0
+        };
+      }
+
+      const points = sanitizeInteger(entry.points, -9999, 9999, 0);
+      if (entry.type === 'region-turn') {
+        breakdown[nation].region += points;
+      } else {
+        breakdown[nation].objective += points;
+      }
+      breakdown[nation].total += points;
+    });
+
+    return breakdown;
+  }
+
+  function getVpByNationAndTurn() {
+    const matrix = {};
+
+    state.vpLog.forEach((entry) => {
+      const nation = normalizeNationForVp(entry.nation);
+      const turn = sanitizeInteger(entry.turn, 0, TOTAL_TURNS, 0);
+      if (!nation || turn <= 0) {
+        return;
+      }
+
+      if (!matrix[nation]) {
+        matrix[nation] = {};
+      }
+
+      matrix[nation][turn] = (matrix[nation][turn] || 0) + sanitizeInteger(entry.points, -9999, 9999, 0);
+    });
+
+    return matrix;
+  }
+
+  function updateVpUi() {
+    if (!vpSummaryLabel || !vpTable) {
+      return;
+    }
+
+    const entries = Object.entries(state.vpByNation || {})
+      .map(([nationName, points]) => [nationName, sanitizeInteger(points, -9999, 9999, 0)])
+      .sort((first, second) => {
+        if (second[1] !== first[1]) {
+          return second[1] - first[1];
+        }
+
+        return first[0].localeCompare(second[0]);
+      });
+
+    if (!entries.length) {
+      vpSummaryLabel.textContent = 'VP: no points yet';
+      vpTable.innerHTML = '<p class="vp-log-hint">No VP has been scored yet.</p>';
+      return;
+    }
+
+    const leaderLine = entries
+      .slice(0, 3)
+      .map(([nationName, points]) => `${nationName} ${points}`)
+      .join(' | ');
+    vpSummaryLabel.textContent = `VP Leaders: ${leaderLine}`;
+
+    const breakdown = getVpBreakdownByNation();
+    const listItems = entries
+      .map(([nationName, total]) => {
+        const byNation = breakdown[nationName] || { region: 0, objective: 0 };
+        return `<li>${nationName}: ${total} VP (Regions ${byNation.region}, Objectives ${byNation.objective})</li>`;
+      })
+      .join('');
+
+    const vpByTurn = getVpByNationAndTurn();
+    const tableHeadTurns = Array.from({ length: TOTAL_TURNS }, (_, index) => `<th>T${index + 1}</th>`).join('');
+    const tableRows = entries
+      .map(([nationName, total]) => {
+        const turnCells = Array.from({ length: TOTAL_TURNS }, (_, index) => {
+          const turn = index + 1;
+          const points = vpByTurn[nationName] ? vpByTurn[nationName][turn] || 0 : 0;
+          const sign = points > 0 ? '+' : '';
+          return `<td>${sign}${points}</td>`;
+        }).join('');
+
+        return `<tr><th scope="row">${nationName}</th>${turnCells}<td><strong>${total}</strong></td></tr>`;
+      })
+      .join('');
+
+    const lastAward = state.vpLog[state.vpLog.length - 1];
+    const hint = lastAward
+      ? `Last award: Turn ${lastAward.turn} - ${lastAward.nation} ${lastAward.points > 0 ? '+' : ''}${lastAward.points} (${lastAward.label}).`
+      : 'No awards yet.';
+
+    vpTable.innerHTML = `<ol class="vp-standings">${listItems}</ol><div class="vp-turn-history-wrap"><table class="vp-turn-history"><thead><tr><th>Nation</th>${tableHeadTurns}<th>Total</th></tr></thead><tbody>${tableRows}</tbody></table></div><p class="vp-log-hint">${hint}</p>`;
+  }
+
   function getEligibleGrowthPlacementSpaces(nationName, options = {}) {
     const { requireNonHill = false } = options;
     const controlledSpaces = getControlledSpacesByNation().get(nationName) || [];
@@ -1450,6 +1968,8 @@
       skipTurnButton.disabled = state.gameComplete;
       skipTurnButton.textContent = state.gameComplete ? 'Game Complete' : 'Skip Turn';
     }
+
+    updateVpUi();
   }
 
   function findSpaceByName(name) {
@@ -3042,7 +3562,7 @@
 
   function syncTurnState() {
     const phase = getCurrentPhase();
-    const activeNationEntry = getActiveNationEntry();
+    updateVpSeenNations();
     evaluateVassalBreakFree();
     cleanPendingCombats();
     cleanGarrisonRequirements();
@@ -3074,9 +3594,17 @@
     if (phase.id === 'growth') {
       state.currentPhaseIndex = 1;
       resolvePendingEntryCombatBeforeMovement();
+      recordVpNationTurnBaseline();
     } else if (phase.id === 'action') {
+      scoreReplaceControlObjectivesForActiveNation(state.currentTurn);
+      scoreLeaderObjectivesForCurrentTurn(state.currentTurn);
+      scorePersistentControlObjectives(state.currentTurn);
+      scoreEliminationObjectives(state.currentTurn);
       state.currentPhaseIndex = 2;
     } else {
+      scorePersistentControlObjectives(state.currentTurn);
+      scoreEliminationObjectives(state.currentTurn);
+
       // End phase complete: advance to next playable nation, skipping nations with no non-leader units.
       let nextPlayable = findNextPlayableNationTurn(state.currentTurn, state.currentNationIndex);
       if (
@@ -3085,7 +3613,14 @@
         (!nextPlayable || nextPlayable.turn > state.currentTurn)
       ) {
         applyHebrewDivision();
+        scorePersistentControlObjectives(state.currentTurn);
+        scoreEliminationObjectives(state.currentTurn);
         nextPlayable = findNextPlayableNationTurn(state.currentTurn, state.currentNationIndex);
+      }
+
+      if (!nextPlayable || nextPlayable.turn > state.currentTurn) {
+        awardRegionVpForTurn(state.currentTurn);
+        scoreSurvivalObjectives(state.currentTurn);
       }
 
       if (nextPlayable) {
@@ -3140,6 +3675,372 @@
     }
 
     finalizeTurnPhaseAdvance();
+  }
+
+  function getAiEngine() {
+    const engine = window.KocNationAI;
+    if (!engine || typeof engine.getNationObjectives !== 'function') {
+      return null;
+    }
+
+    return engine;
+  }
+
+  function getFriendlySupportNearSpace(spaceId, nationName) {
+    if (!spaceId || !nationName) {
+      return 0;
+    }
+
+    const space = spacesById.get(spaceId);
+    if (!space) {
+      return 0;
+    }
+
+    const nearbySpaceIds = new Set([spaceId]);
+    const neighbors = adjacentSpaceLookup.get(space.index) || new Set();
+    neighbors.forEach((neighborIndex) => {
+      const neighbor = findSpaceByIndex(neighborIndex);
+      if (neighbor) {
+        nearbySpaceIds.add(neighbor.id);
+      }
+    });
+
+    return state.units.reduce((count, unit) => {
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      if (!unitType || isLeaderUnitType(unitType)) {
+        return count;
+      }
+
+      return nearbySpaceIds.has(unit.spaceId) && getUnitNation(unit) === nationName
+        ? count + 1
+        : count;
+    }, 0);
+  }
+
+  function moveUnitByAi(unit, targetSpace) {
+    if (!unit || !targetSpace || !canUnitMoveToSpace(unit, targetSpace)) {
+      return false;
+    }
+
+    const movingNation = getUnitNation(unit);
+    const unitType = unitTypeById.get(unit.unitTypeId);
+    if (!movingNation || isLeaderUnitType(unitType)) {
+      return false;
+    }
+
+    const originSpaceId = unit.spaceId && spacesById.has(unit.spaceId) ? unit.spaceId : '';
+    if (originSpaceId && originSpaceId !== targetSpace.id && isGarrisonRequired(originSpaceId, movingNation)) {
+      const nationUnitsAtOrigin = getUnitsInSpace(originSpaceId).filter(
+        (candidate) => getUnitNation(candidate) === movingNation
+      );
+      if (nationUnitsAtOrigin.length <= 1) {
+        return false;
+      }
+    }
+
+    const blockedEnemyPresent = getUnitsInSpace(targetSpace.id).some((occupant) =>
+      isFirstHebrewTurnProtectedNation(movingNation, getUnitNation(occupant))
+    );
+    if (blockedEnemyPresent) {
+      return false;
+    }
+
+    const targetWasEmpty = getUnitsInSpace(targetSpace.id).length === 0;
+    snapUnitToSpace(unit, targetSpace);
+
+    if (targetWasEmpty) {
+      markGarrisonRequired(targetSpace.id, movingNation);
+    }
+
+    const activatedSet = new Set(state.activatedUnitIds);
+    activatedSet.add(unit.id);
+    state.activatedUnitIds = Array.from(activatedSet);
+
+    const enemyPresent = getUnitsInSpace(targetSpace.id).some(
+      (occupant) => canNationAttackDefender(movingNation, getUnitNation(occupant))
+    );
+
+    if (enemyPresent) {
+      const originalConfirm = window.confirm;
+      window.confirm = () => true;
+      try {
+        ensurePendingCombat(targetSpace.id, movingNation, {
+          unitId: unit.id,
+          originSpaceId: originSpaceId || targetSpace.id
+        });
+      } finally {
+        window.confirm = originalConfirm;
+      }
+    }
+
+    return true;
+  }
+
+  function tryAiSubmission(pendingCombat) {
+    if (!pendingCombat) {
+      return false;
+    }
+
+    const defenderUnits = getUnitsInSpace(pendingCombat.spaceId).filter((unit) => {
+      const nation = getUnitNation(unit);
+      return canNationAttackDefender(pendingCombat.attackerNation, nation);
+    });
+    const defenderNation = getSingleDefenderNation(pendingCombat.attackerNation, defenderUnits);
+    if (!defenderNation || !canDefenderSubmit(defenderNation, pendingCombat.attackerNation)) {
+      return false;
+    }
+
+    applySubmission(defenderNation, pendingCombat.attackerNation);
+    markGarrisonRequired(pendingCombat.spaceId, pendingCombat.attackerNation);
+    removePendingCombat(pendingCombat.id);
+    return true;
+  }
+
+  function getNationCombatStrength(spaceId, nationName) {
+    const units = getUnitsInSpace(spaceId).filter((unit) => getUnitNation(unit) === nationName);
+    let combatUnits = 0;
+    let leaders = 0;
+    units.forEach((unit) => {
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      if (!unitType) {
+        return;
+      }
+
+      if (isLeaderUnitType(unitType)) {
+        leaders += 1;
+      } else {
+        combatUnits += 1;
+      }
+    });
+
+    return { combatUnits, leaders };
+  }
+
+  function resolvePendingCombatByAi(pendingCombat) {
+    if (!pendingCombat) {
+      return;
+    }
+
+    if (tryAiSubmission(pendingCombat)) {
+      cleanPendingCombats();
+      return;
+    }
+
+    const result = resolveCombatRound(pendingCombat);
+    if (!result.resolved) {
+      cleanPendingCombats();
+      return;
+    }
+
+    const pendingCombatIndex = state.pendingCombats.findIndex((combat) => combat.id === pendingCombat.id);
+    if (pendingCombatIndex >= 0) {
+      state.pendingCombats[pendingCombatIndex].roundsResolved += 1;
+      pendingCombat = state.pendingCombats[pendingCombatIndex];
+    }
+
+    if (!result.attackerStillPresent || !result.defendersStillPresent) {
+      if (result.attackerStillPresent && !result.defendersStillPresent) {
+        markGarrisonRequired(pendingCombat.spaceId, pendingCombat.attackerNation);
+      }
+      removePendingCombat(pendingCombat.id);
+    }
+
+    cleanPendingCombats();
+  }
+
+  function runAiActionPhaseForActiveNation() {
+    if (state.gameComplete || getCurrentPhase().id !== 'action') {
+      return;
+    }
+
+    const ai = getAiEngine();
+    if (!ai) {
+      setCombatStatus('AI module is unavailable.', 'error');
+      return;
+    }
+
+    const activeNations = getActiveNationNames();
+    if (!activeNations.length) {
+      return;
+    }
+
+    const primaryNation = ai.normalizeNationName(activeNations[0]);
+    const objectives = ai.getNationObjectives(primaryNation, state.currentTurn, detectedSpaces);
+    const movedUnitIds = new Set();
+    let movedCount = 0;
+
+    const movableUnits = state.units.filter((unit) => {
+      const unitNation = getUnitNation(unit);
+      if (!unitNation || !activeNations.includes(unitNation)) {
+        return false;
+      }
+
+      const unitType = unitTypeById.get(unit.unitTypeId);
+      if (!unitType || isLeaderUnitType(unitType) || !unit.spaceId) {
+        return false;
+      }
+
+      if (!canInteractWithUnit(unit) || state.retreatedUnitIds.includes(unit.id)) {
+        return false;
+      }
+
+      return true;
+    });
+
+    const moveBudget = ai.chooseMoveCount(movableUnits.length);
+
+    for (let step = 0; step < moveBudget; step += 1) {
+      const candidates = [];
+
+      movableUnits.forEach((unit) => {
+        if (movedUnitIds.has(unit.id)) {
+          return;
+        }
+
+        const current = state.units.find((candidate) => candidate.id === unit.id);
+        if (!current || !current.spaceId) {
+          return;
+        }
+
+        const unitNation = getUnitNation(current);
+        detectedSpaces.forEach((space) => {
+          if (!space || space.id === current.spaceId || !canUnitMoveToSpace(current, space)) {
+            return;
+          }
+
+          const occupants = getUnitsInSpace(space.id);
+          const enemyInTarget = occupants.filter((occupant) => canNationAttackDefender(unitNation, getUnitNation(occupant)));
+          const friendlyInTarget = occupants.filter((occupant) => getUnitNation(occupant) === unitNation).length;
+          const candidate = {
+            unitId: current.id,
+            fromSpaceId: current.spaceId,
+            targetSpaceId: space.id,
+            targetSpaceName: space.name,
+            targetGrowth: getSpaceGrowthValue(space),
+            friendlyInTarget,
+            enemyInTarget: enemyInTarget.length,
+            enemyNationsInTarget: Array.from(new Set(enemyInTarget.map((occupant) => getUnitNation(occupant)).filter(Boolean))),
+            friendlySupportNearTarget: getFriendlySupportNearSpace(space.id, unitNation)
+          };
+
+          const survivalPriority = objectives.surviveToTurn && state.currentTurn >= objectives.surviveToTurn.turn - 1
+            ? 1
+            : 0;
+          const evaluation = ai.evaluateMove(candidate, {
+            controlSpaceWeights: objectives.controlSpaceWeights,
+            eliminateNations: objectives.eliminateNations,
+            replaceControl: objectives.replaceControl,
+            survivalPriority
+          });
+
+          candidates.push({
+            ...candidate,
+            score: evaluation.score
+          });
+        });
+      });
+
+      if (!candidates.length) {
+        break;
+      }
+
+      candidates.sort((first, second) => second.score - first.score);
+      const pickPool = candidates.slice(0, Math.min(3, candidates.length));
+      const selected = pickPool[Math.floor(Math.random() * pickPool.length)] || candidates[0];
+      const movingUnit = state.units.find((unit) => unit.id === selected.unitId);
+      const targetSpace = spacesById.get(selected.targetSpaceId);
+      if (!movingUnit || !targetSpace) {
+        break;
+      }
+
+      const moved = moveUnitByAi(movingUnit, targetSpace);
+      if (!moved) {
+        movedUnitIds.add(selected.unitId);
+        continue;
+      }
+
+      movedUnitIds.add(selected.unitId);
+      movedCount += 1;
+    }
+
+    let combatIterations = 0;
+    while (combatIterations < 80) {
+      const activePendingCombats = state.pendingCombats.filter((combat) => activeNations.includes(combat.attackerNation));
+      if (!activePendingCombats.length) {
+        break;
+      }
+
+      let changed = false;
+      for (const pendingCombat of activePendingCombats) {
+        const attacker = getNationCombatStrength(pendingCombat.spaceId, pendingCombat.attackerNation);
+        const defenders = getUnitsInSpace(pendingCombat.spaceId)
+          .filter((unit) => canNationAttackDefender(pendingCombat.attackerNation, getUnitNation(unit)));
+        const defenderNation = getDefenderNationName(pendingCombat.attackerNation, defenders);
+        const defenderStrength = getNationCombatStrength(pendingCombat.spaceId, defenderNation);
+        const action = ai.chooseCombatAction({
+          roundsResolved: pendingCombat.roundsResolved || 0,
+          canWithdraw: (pendingCombat.roundsResolved || 0) > 0,
+          attackerUnits: attacker.combatUnits,
+          attackerLeaders: attacker.leaders,
+          defenderUnits: defenderStrength.combatUnits,
+          defenderLeaders: defenderStrength.leaders
+        });
+
+        if (action === 'withdraw' && (pendingCombat.roundsResolved || 0) > 0) {
+          withdrawPendingCombat(pendingCombat);
+          cleanPendingCombats();
+          changed = true;
+        } else {
+          resolvePendingCombatByAi(pendingCombat);
+          changed = true;
+        }
+      }
+
+      if (!changed) {
+        break;
+      }
+
+      combatIterations += 1;
+    }
+
+    renderUnits();
+    updateTurnPhaseUi();
+    saveState();
+    setCombatStatus(`AI completed ${movedCount} move${movedCount === 1 ? '' : 's'} for ${getActiveNationEntry().label}.`, 'info', 3500);
+  }
+
+  function runAiTurn() {
+    if (state.gameComplete) {
+      return;
+    }
+
+    if (!getAiEngine()) {
+      setCombatStatus('AI module is unavailable.', 'error');
+      return;
+    }
+
+    const startingTurn = state.currentTurn;
+    const startingNationIndex = state.currentNationIndex;
+    let safety = 0;
+
+    while (!state.gameComplete && safety < 20) {
+      if (getCurrentPhase().id === 'action') {
+        runAiActionPhaseForActiveNation();
+      }
+
+      const advanced = stepTurnPhase();
+      if (!advanced) {
+        break;
+      }
+
+      finalizeTurnPhaseAdvance();
+
+      if (state.currentTurn !== startingTurn || state.currentNationIndex !== startingNationIndex) {
+        break;
+      }
+
+      safety += 1;
+    }
   }
 
   function updateMouseCoordsText(sourceX, sourceY) {
@@ -4559,6 +5460,10 @@
 
   if (skipTurnButton) {
     skipTurnButton.addEventListener('click', skipTurn);
+  }
+
+  if (runAiTurnButton) {
+    runAiTurnButton.addEventListener('click', runAiTurn);
   }
 
   syncMapSize();

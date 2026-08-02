@@ -24,6 +24,7 @@
         </div>
         <button id="next-phase" type="button">Advance to Action Phase</button>
         <button id="skip-turn" type="button">Skip Turn</button>
+        <button id="run-ai-turn" type="button">Run AI Turn</button>
         <label for="zoom-range">Zoom</label>
         <input id="zoom-range" type="range" min="0.5" max="2" step="0.1" value="1" />
         <span id="zoom-value">100%</span>
@@ -35,6 +36,10 @@
         <span id="combat-status" aria-live="polite"></span>
         <span id="mouse-coords" aria-live="polite">Mouse: -, -</span>
         <span id="space-count" aria-live="polite">Spaces: analyzing...</span>
+        <details id="vp-panel" class="vp-panel">
+          <summary id="vp-summary">VP: no points yet</summary>
+          <div id="vp-table" aria-live="polite"></div>
+        </details>
       </section>
 
       <section id="map-viewport" aria-label="Scrollable game map">
@@ -45,6 +50,7 @@
       </section>
     </main>
 
+    <script src="nation-ai.js"></script>
     <script src="script.js"></script>
   </body>
 </html>
