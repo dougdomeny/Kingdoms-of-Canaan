@@ -357,6 +357,8 @@ main {
   font-size: 0.7rem;
   font-weight: 700;
   letter-spacing: 0.02em;
+  line-height: 1.15;
+  white-space: pre-line;
   text-shadow: none;
   max-width: 13rem;
   text-align: center;

@@ -15,7 +15,7 @@
   const mapCanvas = document.getElementById('map-canvas');
   const adjacencyLayer = document.getElementById('adjacency-layer');
   const spacesLayer = document.getElementById('spaces-layer');
-  const showSpaceNamesToggle = document.getElementById('show-space-names');
+  const showRegionLabelsToggle = document.getElementById('show-region-labels');
   const mouseCoords = document.getElementById('mouse-coords');
   const zoomRange = document.getElementById('zoom-range');
   const zoomValue = document.getElementById('zoom-value');
@@ -4828,14 +4828,21 @@
 
     spacesLayer.innerHTML = '';
 
+    const showRegionLabels = !showRegionLabelsToggle || showRegionLabelsToggle.checked;
+    if (!showRegionLabels) {
+      if (spaceCount) {
+        spaceCount.textContent = `Spaces: ${spaces.length}`;
+      }
+      return;
+    }
+
     spaces.forEach((space) => {
       const marker = document.createElement('div');
       marker.className = 'space-marker';
       const suffix = getSpaceMarkerSuffix(space);
-      marker.textContent = showSpaceNamesToggle && showSpaceNamesToggle.checked
-        ? `${space.index} ${suffix} ${space.name}`
-        : `${space.index} ${suffix}`;
-      marker.title = `${space.name || `Space ${space.index}`} (${suffix})`;
+      const displayName = space.name || `Space ${space.index}`;
+      marker.textContent = `${space.index} ${suffix}\n${displayName}`;
+      marker.title = `${displayName} (${suffix})`;
       marker.style.left = `${Math.round(toBoardX(space.centroidX) * state.zoom)}px`;
       marker.style.top = `${Math.round(toBoardY(space.centroidY) * state.zoom)}px`;
       spacesLayer.appendChild(marker);
@@ -5650,8 +5657,8 @@
 
   zoomRange.addEventListener('input', () => setZoom(Number(zoomRange.value)));
 
-  if (showSpaceNamesToggle) {
-    showSpaceNamesToggle.addEventListener('change', () => {
+  if (showRegionLabelsToggle) {
+    showRegionLabelsToggle.addEventListener('change', () => {
       renderSpaceMarkers(detectedSpaces);
     });
   }
