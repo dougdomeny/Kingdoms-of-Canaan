@@ -26,6 +26,7 @@
   const nextPhaseButton = document.getElementById('next-phase');
   const skipTurnButton = document.getElementById('skip-turn');
   const runAiTurnButton = document.getElementById('run-ai-turn');
+  const runFullAiTurnButton = document.getElementById('run-full-ai-turn');
   const currentNationLabel = document.getElementById('current-nation');
   const resetGameButton = document.getElementById('reset-game');
   const combatStatusLabel = document.getElementById('combat-status');
@@ -456,6 +457,32 @@
   combatNoticeOverlay.appendChild(combatNoticeDialog);
   document.body.appendChild(combatNoticeOverlay);
 
+  const aiSummaryOverlay = document.createElement('div');
+  aiSummaryOverlay.className = 'ai-summary-overlay hidden';
+  aiSummaryOverlay.setAttribute('role', 'dialog');
+  aiSummaryOverlay.setAttribute('aria-modal', 'true');
+
+  const aiSummaryDialog = document.createElement('div');
+  aiSummaryDialog.className = 'ai-summary-dialog';
+
+  const aiSummaryTitle = document.createElement('h2');
+  aiSummaryTitle.className = 'ai-summary-title';
+  aiSummaryTitle.textContent = 'AI Turn Summary';
+
+  const aiSummaryMessage = document.createElement('pre');
+  aiSummaryMessage.className = 'ai-summary-message';
+
+  const aiSummaryOkButton = document.createElement('button');
+  aiSummaryOkButton.type = 'button';
+  aiSummaryOkButton.className = 'ai-summary-ok';
+  aiSummaryOkButton.textContent = 'OK';
+
+  aiSummaryDialog.appendChild(aiSummaryTitle);
+  aiSummaryDialog.appendChild(aiSummaryMessage);
+  aiSummaryDialog.appendChild(aiSummaryOkButton);
+  aiSummaryOverlay.appendChild(aiSummaryDialog);
+  document.body.appendChild(aiSummaryOverlay);
+
   function hideCombatNotice() {
     combatNoticeOverlay.classList.add('hidden');
     combatNoticeDialog.style.left = '';
@@ -465,6 +492,17 @@
     if (typeof onOk === 'function') {
       onOk();
     }
+  }
+
+  function hideAiTurnSummary() {
+    aiSummaryOverlay.classList.add('hidden');
+  }
+
+  function showAiTurnSummary(summaryText, title = 'AI Turn Summary') {
+    aiSummaryTitle.textContent = String(title || 'AI Turn Summary');
+    aiSummaryMessage.textContent = String(summaryText || '').trim() || 'No notable events occurred.';
+    aiSummaryOverlay.classList.remove('hidden');
+    aiSummaryOkButton.focus();
   }
 
   function showCombatNotice(message, onOk, spaceId = '') {
@@ -498,7 +536,22 @@
     }
   });
 
+  aiSummaryOkButton.addEventListener('click', hideAiTurnSummary);
+  aiSummaryOverlay.addEventListener('click', (event) => {
+    if (event.target === aiSummaryOverlay) {
+      hideAiTurnSummary();
+    }
+  });
+
   document.addEventListener('keydown', (event) => {
+    if (!aiSummaryOverlay.classList.contains('hidden')) {
+      if (event.key === 'Escape' || event.key === 'Enter') {
+        event.preventDefault();
+        hideAiTurnSummary();
+      }
+      return;
+    }
+
     if (combatNoticeOverlay.classList.contains('hidden')) {
       return;
     }
@@ -1089,6 +1142,30 @@
     return NATION_ORDER[state.currentNationIndex] || NATION_ORDER[0];
   }
 
+  function isUnitEngagedInPendingCombat(unit) {
+    if (!unit || !unit.id || !unit.spaceId) {
+      return false;
+    }
+
+    return state.pendingCombats.some((combat) => {
+      if (!combat || combat.spaceId !== unit.spaceId) {
+        return false;
+      }
+
+      const attackerLocked = Array.isArray(combat.attackerEntries)
+        ? combat.attackerEntries.some((entry) => entry && entry.unitId === unit.id)
+        : false;
+      if (attackerLocked) {
+        return true;
+      }
+
+      const defenderLocked = Array.isArray(combat.defenderUnitIds)
+        ? combat.defenderUnitIds.includes(unit.id)
+        : false;
+      return defenderLocked;
+    });
+  }
+
   function isNationActive(nationName) {
     if (!nationName) {
       return false;
@@ -1195,10 +1272,7 @@
       return false;
     }
 
-    const unitInPendingCombat = state.pendingCombats.some((combat) =>
-      combat.attackerEntries.some((entry) => entry.unitId === unit.id)
-    );
-    if (unitInPendingCombat) {
+    if (isUnitEngagedInPendingCombat(unit)) {
       return false;
     }
 
@@ -1784,6 +1858,10 @@
 
     const regionCounts = getControlledRegionCountsByNation();
     Object.entries(regionCounts).forEach(([nationName, count]) => {
+      if (isRaiderNation(nationName)) {
+        return;
+      }
+
       const points = sanitizeInteger(count, 0, 9999, 0);
       if (points <= 0) {
         return;
@@ -1963,12 +2041,18 @@
 
     Object.entries(state.vassalByNation).forEach(([vassalNation, overlordNation]) => {
       const submittedTurn = sanitizeInteger(state.vassalTurnByNation[vassalNation], 1, TOTAL_TURNS, 0);
-      if (!vassalNation || !overlordNation || submittedTurn <= 0 || submittedTurn < activeTurn) {
+      if (!vassalNation || !overlordNation || submittedTurn <= 0) {
+        return;
+      }
+
+      // Vassal status persists until removed by explicit game events,
+      // not by sharing a space with other nations or by turn rollover.
+      if (getUnitCountByNation(vassalNation) <= 0 || getUnitCountByNation(overlordNation) <= 0) {
         return;
       }
 
       nextVassalByNation[vassalNation] = overlordNation;
-      nextVassalTurnByNation[vassalNation] = submittedTurn;
+      nextVassalTurnByNation[vassalNation] = Math.min(submittedTurn, activeTurn);
     });
 
     state.vassalByNation = nextVassalByNation;
@@ -1991,9 +2075,13 @@
     }
 
     if (phaseHelpLabel) {
+      const hasPendingCombats = state.pendingCombats.length > 0;
+      const actionLockHint = phase.id === 'action' && hasPendingCombats
+        ? ' Units in unresolved combats are locked; other units may still move.'
+        : '';
       phaseHelpLabel.textContent = state.gameComplete
         ? 'The ninth turn is complete.'
-        : phase.helpText;
+        : `${phase.helpText}${actionLockHint}`;
     }
 
     const currentNation = NATION_ORDER[state.currentNationIndex] || NATION_ORDER[0];
@@ -2025,6 +2113,16 @@
     if (skipTurnButton) {
       skipTurnButton.disabled = state.gameComplete;
       skipTurnButton.textContent = state.gameComplete ? 'Game Complete' : 'Skip Turn';
+    }
+
+    if (runAiTurnButton) {
+      runAiTurnButton.disabled = state.gameComplete;
+      runAiTurnButton.textContent = state.gameComplete ? 'Game Complete' : 'Run AI Turn';
+    }
+
+    if (runFullAiTurnButton) {
+      runFullAiTurnButton.disabled = state.gameComplete;
+      runFullAiTurnButton.textContent = state.gameComplete ? 'Game Complete' : 'Run Full AI Turn';
     }
 
     updateVpUi();
@@ -2120,6 +2218,26 @@
         const unitType = unitTypeById.get(unit.unitTypeId);
         return isRegularUnitType(unitType);
       });
+    });
+  }
+
+  function releaseStartOfTurnGarrisonsForActiveNation() {
+    const activeNations = new Set(getActiveNationNames());
+    if (!activeNations.size || !state.requiredGarrisons.length) {
+      return;
+    }
+
+    state.requiredGarrisons = state.requiredGarrisons.filter((entry) => {
+      if (!entry || !entry.spaceId || !entry.nation) {
+        return false;
+      }
+
+      if (!activeNations.has(entry.nation)) {
+        return true;
+      }
+
+      const occupiedByNation = getUnitsInSpace(entry.spaceId).some((unit) => getUnitNation(unit) === entry.nation);
+      return !occupiedByNation;
     });
   }
 
@@ -3632,6 +3750,11 @@
     cleanPendingCombats();
     cleanGarrisonRequirements();
 
+    // At start of nation turn, occupied regions do not require holding a prior-turn garrison.
+    if (phase.id === 'growth') {
+      releaseStartOfTurnGarrisonsForActiveNation();
+    }
+
     if (phase.id === 'end') {
       applyEndPhaseCleanup();
       return;
@@ -3882,24 +4005,196 @@
     return { combatUnits, leaders };
   }
 
-  function resolvePendingCombatByAi(pendingCombat) {
+  function snapshotUnitTotalsByNation() {
+    const totals = {};
+    state.units.forEach((unit) => {
+      const nation = normalizeNationForVp(getUnitNation(unit));
+      if (!nation) {
+        return;
+      }
+
+      totals[nation] = (totals[nation] || 0) + 1;
+    });
+
+    return totals;
+  }
+
+  function createAiTurnSummary(turn, nationLabel) {
+    return {
+      turn,
+      nationLabel,
+      attacksBySpaceId: new Map(),
+      lossesByNation: {}
+    };
+  }
+
+  function ensureAiTurnAttackSummary(summary, pendingCombat) {
+    if (!summary || !pendingCombat || !pendingCombat.spaceId) {
+      return null;
+    }
+
+    let entry = summary.attacksBySpaceId.get(pendingCombat.spaceId);
+    if (!entry) {
+      const space = spacesById.get(pendingCombat.spaceId);
+      entry = {
+        spaceId: pendingCombat.spaceId,
+        spaceName: space ? space.name : pendingCombat.spaceId,
+        spaceIndex: space ? space.index : 999,
+        attackerNation: pendingCombat.attackerNation,
+        attackerUnitIds: new Set(),
+        defenderNations: new Set(),
+        roundsResolved: 0,
+        endedByWithdrawal: false,
+        endedBySubmission: false,
+        endedByElimination: false
+      };
+      summary.attacksBySpaceId.set(pendingCombat.spaceId, entry);
+    }
+
+    if (Array.isArray(pendingCombat.attackerEntries)) {
+      pendingCombat.attackerEntries.forEach((attackerEntry) => {
+        if (attackerEntry && attackerEntry.unitId) {
+          entry.attackerUnitIds.add(attackerEntry.unitId);
+        }
+      });
+    }
+
+    const defenders = getUnitsInSpace(pendingCombat.spaceId)
+      .filter((unit) => canNationAttackDefender(pendingCombat.attackerNation, getUnitNation(unit)));
+    defenders.forEach((unit) => {
+      const defenderNation = normalizeNationForVp(getUnitNation(unit));
+      if (defenderNation) {
+        entry.defenderNations.add(defenderNation);
+      }
+    });
+
+    if (!entry.attackerUnitIds.size) {
+      getUnitsInSpace(pendingCombat.spaceId)
+        .filter((unit) => getUnitNation(unit) === pendingCombat.attackerNation)
+        .forEach((unit) => entry.attackerUnitIds.add(unit.id));
+    }
+
+    return entry;
+  }
+
+  function recordAiTurnLosses(summary, beforeTotals, afterTotals) {
+    if (!summary) {
+      return;
+    }
+
+    const nations = new Set([
+      ...Object.keys(beforeTotals || {}),
+      ...Object.keys(afterTotals || {})
+    ]);
+
+    nations.forEach((nation) => {
+      const before = Number(beforeTotals[nation] || 0);
+      const after = Number(afterTotals[nation] || 0);
+      if (after >= before) {
+        return;
+      }
+
+      const losses = before - after;
+      summary.lossesByNation[nation] = (summary.lossesByNation[nation] || 0) + losses;
+    });
+  }
+
+  function buildAiTurnSummaryText(summary) {
+    if (!summary) {
+      return 'No AI summary is available.';
+    }
+
+    const lines = [`Turn ${summary.turn} - ${summary.nationLabel}`];
+    const attackEntries = Array.from(summary.attacksBySpaceId.values())
+      .sort((first, second) => {
+        if (first.spaceIndex !== second.spaceIndex) {
+          return first.spaceIndex - second.spaceIndex;
+        }
+        return first.spaceName.localeCompare(second.spaceName);
+      });
+
+    const totalAttackingUnits = attackEntries.reduce((sum, entry) => sum + entry.attackerUnitIds.size, 0);
+    lines.push(`Attacks: ${totalAttackingUnits} unit${totalAttackingUnits === 1 ? '' : 's'} across ${attackEntries.length} region${attackEntries.length === 1 ? '' : 's'}.`);
+    lines.push('');
+
+    if (!attackEntries.length) {
+      lines.push('No attacks were made during this AI turn.');
+    } else {
+      attackEntries.forEach((entry) => {
+        const defenderText = entry.defenderNations.size
+          ? Array.from(entry.defenderNations).sort().join(', ')
+          : 'unknown defenders';
+        const outcomeParts = [];
+        if (entry.roundsResolved > 0) {
+          outcomeParts.push(`${entry.roundsResolved} combat round${entry.roundsResolved === 1 ? '' : 's'} resolved`);
+        }
+        if (entry.endedBySubmission) {
+          outcomeParts.push('defender submitted');
+        }
+        if (entry.endedByWithdrawal) {
+          outcomeParts.push('attacker withdrew');
+        }
+        if (entry.endedByElimination) {
+          outcomeParts.push('one side eliminated');
+        }
+
+        const outcomeText = outcomeParts.length
+          ? outcomeParts.join(', ')
+          : 'no combat resolution';
+        lines.push(
+          `- ${entry.attackerNation} attacked ${entry.spaceName} with ${entry.attackerUnitIds.size} unit${entry.attackerUnitIds.size === 1 ? '' : 's'} vs ${defenderText}; ${outcomeText}.`
+        );
+      });
+    }
+
+    lines.push('');
+    lines.push('Losses by Nation:');
+    const lossEntries = Object.entries(summary.lossesByNation)
+      .filter(([, losses]) => losses > 0)
+      .sort((first, second) => second[1] - first[1] || first[0].localeCompare(second[0]));
+
+    if (!lossEntries.length) {
+      lines.push('- No units lost.');
+    } else {
+      lossEntries.forEach(([nation, losses]) => {
+        lines.push(`- ${nation}: ${losses} unit${losses === 1 ? '' : 's'} lost.`);
+      });
+    }
+
+    return lines.join('\n');
+  }
+
+  function resolvePendingCombatByAi(pendingCombat, aiTurnSummary = null) {
     if (!pendingCombat) {
       return false;
     }
 
     const pendingBefore = state.pendingCombats.length;
+    const summaryEntry = ensureAiTurnAttackSummary(aiTurnSummary, pendingCombat);
 
     if (tryAiSubmission(pendingCombat)) {
+      if (summaryEntry) {
+        summaryEntry.endedBySubmission = true;
+      }
       combatDisplayBySpaceId.delete(pendingCombat.spaceId);
       cleanPendingCombats();
       return true;
     }
 
+    const unitTotalsBefore = snapshotUnitTotalsByNation();
+
     const result = resolveCombatRound(pendingCombat);
+    const unitTotalsAfter = snapshotUnitTotalsByNation();
+    recordAiTurnLosses(aiTurnSummary, unitTotalsBefore, unitTotalsAfter);
+
     if (!result.resolved) {
       combatDisplayBySpaceId.delete(pendingCombat.spaceId);
       cleanPendingCombats();
       return state.pendingCombats.length !== pendingBefore;
+    }
+
+    if (summaryEntry) {
+      summaryEntry.roundsResolved += 1;
     }
 
     const pendingCombatIndex = state.pendingCombats.findIndex((combat) => combat.id === pendingCombat.id);
@@ -3909,6 +4204,9 @@
     }
 
     if (!result.attackerStillPresent || !result.defendersStillPresent) {
+      if (summaryEntry) {
+        summaryEntry.endedByElimination = true;
+      }
       if (result.attackerStillPresent && !result.defendersStillPresent) {
         markGarrisonRequired(pendingCombat.spaceId, pendingCombat.attackerNation);
       }
@@ -3960,9 +4258,7 @@
       }
 
       if (!canInteractWithUnit(unit)) {
-        const lockedInPendingCombat = state.pendingCombats.some((combat) =>
-          combat.attackerEntries.some((entry) => entry.unitId === unit.id)
-        );
+        const lockedInPendingCombat = isUnitEngagedInPendingCombat(unit);
         if (state.retreatedUnitIds.includes(unit.id)) {
           recordReason('retreated-this-turn', unit);
         } else if (lockedInPendingCombat) {
@@ -4004,7 +4300,7 @@
     };
   }
 
-  function runAiActionPhaseForActiveNation() {
+  function runAiActionPhaseForActiveNation(aiTurnSummary = null) {
     if (state.gameComplete || getCurrentPhase().id !== 'action') {
       return;
     }
@@ -4019,6 +4315,23 @@
     if (!activeNations.length) {
       return;
     }
+
+    const getActiveNationForceStats = () => {
+      const nationCombatUnits = state.units.filter((unit) => {
+        const unitNation = getUnitNation(unit);
+        if (!unitNation || !activeNations.includes(unitNation) || !unit.spaceId) {
+          return false;
+        }
+
+        const unitType = unitTypeById.get(unit.unitTypeId);
+        return Boolean(unitType && !isLeaderUnitType(unitType));
+      });
+
+      const nationUnitCount = nationCombatUnits.length;
+      const nationRegionCount = new Set(nationCombatUnits.map((unit) => unit.spaceId)).size;
+      const isSmallNation = nationUnitCount > 0 && (nationUnitCount <= 3 || nationRegionCount <= 2);
+      return { nationUnitCount, nationRegionCount, isSmallNation };
+    };
 
     const primaryNation = ai.normalizeNationName(activeNations[0]);
     const objectives = ai.getNationObjectives(primaryNation, state.currentTurn, detectedSpaces);
@@ -4087,11 +4400,14 @@
             const survivalPriority = objectives.surviveToTurn && state.currentTurn >= objectives.surviveToTurn.turn - 1
               ? 1
               : 0;
+            const forceStats = getActiveNationForceStats();
             const evaluation = ai.evaluateMove(candidate, {
               controlSpaceWeights: objectives.controlSpaceWeights,
               eliminateNations: objectives.eliminateNations,
               replaceControl: objectives.replaceControl,
-              survivalPriority
+              survivalPriority,
+              nationUnitCount: forceStats.nationUnitCount,
+              nationRegionCount: forceStats.nationRegionCount
             });
 
             candidates.push({
@@ -4135,21 +4451,29 @@
 
         let changedThisPass = false;
         for (const pendingCombat of activePendingCombats) {
+          const summaryEntry = ensureAiTurnAttackSummary(aiTurnSummary, pendingCombat);
           const attacker = getNationCombatStrength(pendingCombat.spaceId, pendingCombat.attackerNation);
           const defenders = getUnitsInSpace(pendingCombat.spaceId)
             .filter((unit) => canNationAttackDefender(pendingCombat.attackerNation, getUnitNation(unit)));
           const defenderNation = getDefenderNationName(pendingCombat.attackerNation, defenders);
           const defenderStrength = getNationCombatStrength(pendingCombat.spaceId, defenderNation);
+          const forceStats = getActiveNationForceStats();
           const action = ai.chooseCombatAction({
             roundsResolved: pendingCombat.roundsResolved || 0,
             canWithdraw: (pendingCombat.roundsResolved || 0) > 0,
             attackerUnits: attacker.combatUnits,
             attackerLeaders: attacker.leaders,
             defenderUnits: defenderStrength.combatUnits,
-            defenderLeaders: defenderStrength.leaders
+            defenderLeaders: defenderStrength.leaders,
+            nationUnitCount: forceStats.nationUnitCount,
+            nationRegionCount: forceStats.nationRegionCount,
+            isSmallNation: forceStats.isSmallNation
           });
 
           if (action === 'withdraw' && (pendingCombat.roundsResolved || 0) > 0) {
+            if (summaryEntry) {
+              summaryEntry.endedByWithdrawal = true;
+            }
             withdrawPendingCombat(pendingCombat);
             combatDisplayBySpaceId.delete(pendingCombat.spaceId);
             cleanPendingCombats();
@@ -4157,7 +4481,7 @@
             continue;
           }
 
-          if (resolvePendingCombatByAi(pendingCombat)) {
+          if (resolvePendingCombatByAi(pendingCombat, aiTurnSummary)) {
             changedThisPass = true;
           }
         }
@@ -4216,11 +4540,13 @@
 
     const startingTurn = state.currentTurn;
     const startingNationIndex = state.currentNationIndex;
+    const startingNationLabel = getActiveNationEntry().label;
+    const aiTurnSummary = createAiTurnSummary(startingTurn, startingNationLabel);
     let safety = 0;
 
     while (!state.gameComplete && safety < 20) {
       if (getCurrentPhase().id === 'action') {
-        runAiActionPhaseForActiveNation();
+        runAiActionPhaseForActiveNation(aiTurnSummary);
       }
 
       const advanced = stepTurnPhase();
@@ -4235,6 +4561,40 @@
       }
 
       safety += 1;
+    }
+
+    showAiTurnSummary(buildAiTurnSummaryText(aiTurnSummary), 'Run AI Turn Summary');
+  }
+
+  function runFullAiTurn() {
+    if (state.gameComplete) {
+      return;
+    }
+
+    if (!getAiEngine()) {
+      setCombatStatus('AI module is unavailable.', 'error');
+      return;
+    }
+
+    const targetTurn = state.currentTurn;
+    let safety = 0;
+
+    while (!state.gameComplete && state.currentTurn === targetTurn && safety < 240) {
+      if (getCurrentPhase().id === 'action') {
+        runAiActionPhaseForActiveNation();
+      }
+
+      const advanced = stepTurnPhase();
+      if (!advanced) {
+        break;
+      }
+
+      finalizeTurnPhaseAdvance();
+      safety += 1;
+    }
+
+    if (!state.gameComplete && state.currentTurn > targetTurn) {
+      setCombatStatus(`AI completed all nations for turn ${targetTurn}.`, 'success', 7000);
     }
   }
 
@@ -5198,9 +5558,24 @@
       }
 
       if (unitLocked) {
+        let lockReason = 'movement unavailable right now';
+        if (state.gameComplete) {
+          lockReason = 'movement disabled after game completion';
+        } else if (getCurrentPhase().id === 'end') {
+          lockReason = 'movement disabled during End Phase';
+        } else if (getCurrentPhase().id === 'growth' && unitType && !isLeaderUnitType(unitType)) {
+          lockReason = 'only leaders can move during Growth Phase';
+        } else if (state.retreatedUnitIds.includes(unit.id)) {
+          lockReason = 'this unit retreated and cannot move again this turn';
+        } else if (isUnitEngagedInPendingCombat(unit)) {
+          lockReason = 'this unit is engaged in unresolved combat';
+        } else if (!isNationActive(unitNation)) {
+          lockReason = 'this unit is not from the active nation';
+        }
+
         button.title = button.title
-          ? `${button.title} - movement disabled after game completion`
-          : 'Movement disabled after game completion';
+          ? `${button.title} - ${lockReason}`
+          : lockReason.charAt(0).toUpperCase() + lockReason.slice(1);
       } else if (unitType && isLeaderUnitType(unitType) && getCurrentPhase().id === 'growth') {
         button.title = button.title
           ? `${button.title} - place on any space containing another ${unitType.nation} unit`
@@ -5687,6 +6062,10 @@
 
   if (runAiTurnButton) {
     runAiTurnButton.addEventListener('click', runAiTurn);
+  }
+
+  if (runFullAiTurnButton) {
+    runFullAiTurnButton.addEventListener('click', runFullAiTurn);
   }
 
   syncMapSize();

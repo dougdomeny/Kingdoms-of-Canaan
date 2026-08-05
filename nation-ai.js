@@ -174,6 +174,10 @@
   function evaluateMove(candidate, context) {
     const scoreParts = [];
     let score = 0;
+    const nationUnitCount = Number(context.nationUnitCount || 0);
+    const nationRegionCount = Number(context.nationRegionCount || 0);
+    const isSmallNation = nationUnitCount > 0 && (nationUnitCount <= 3 || nationRegionCount <= 2);
+    const isTinyNation = nationUnitCount > 0 && nationUnitCount <= 2;
 
     const targetObjectiveWeight = context.controlSpaceWeights[candidate.targetSpaceName] || 0;
     if (targetObjectiveWeight > 0) {
@@ -192,10 +196,36 @@
     score += spreadScore;
     scoreParts.push({ label: 'spread', value: spreadScore });
 
+    if (isSmallNation && candidate.friendlyInTarget === 0 && candidate.enemyInTarget === 0) {
+      // Small nations should expand into uncontested spaces first for preservation.
+      const emptySpaceBonus = isTinyNation ? 8.5 : 5.2;
+      score += emptySpaceBonus;
+      scoreParts.push({ label: 'small-empty-expansion', value: emptySpaceBonus });
+    }
+
     if (candidate.enemyInTarget > 0) {
       const pressureBonus = context.replaceControl > 0 ? 2.8 : 1.5;
       score += pressureBonus;
       scoreParts.push({ label: 'enemy-contact', value: pressureBonus });
+    }
+
+    if (isSmallNation && candidate.enemyInTarget > 0) {
+      const smallContactPenalty = (isTinyNation ? 8 : 6) + Math.min(4, candidate.enemyInTarget * 1.2);
+      score -= smallContactPenalty;
+      scoreParts.push({ label: 'small-preserve-force', value: -smallContactPenalty });
+    }
+
+    if (isTinyNation && candidate.enemyInTarget > 0 && targetObjectiveWeight < 2) {
+      // Tiny nations should almost never initiate non-critical battles.
+      const tinyBattleAvoidPenalty = 10;
+      score -= tinyBattleAvoidPenalty;
+      scoreParts.push({ label: 'tiny-battle-avoid', value: -tinyBattleAvoidPenalty });
+    }
+
+    if (candidate.enemyInTarget > candidate.friendlySupportNearTarget) {
+      const localRiskPenalty = Math.min(3.5, 1 + (candidate.enemyInTarget - candidate.friendlySupportNearTarget) * 0.8);
+      score -= localRiskPenalty;
+      scoreParts.push({ label: 'local-risk', value: -localRiskPenalty });
     }
 
     if (candidate.enemyNationsInTarget.some((nation) => context.eliminateNations[nation] > 0)) {
@@ -208,7 +238,9 @@
       scoreParts.push({ label: 'survival-risk', value: -2.2 });
     }
 
-    const jitter = (Math.random() - 0.5) * 1.6;
+    const jitter = isSmallNation
+      ? (Math.random() - 0.5) * 0.7
+      : (Math.random() - 0.5) * 1.6;
     score += jitter;
     scoreParts.push({ label: 'jitter', value: jitter });
 
@@ -234,6 +266,31 @@
   function chooseCombatAction(context) {
     if (!context.canWithdraw) {
       return 'resolve';
+    }
+
+    const nationUnitCount = Number(context.nationUnitCount || 0);
+    const nationRegionCount = Number(context.nationRegionCount || 0);
+    const isSmallNation = Boolean(context.isSmallNation) ||
+      (nationUnitCount > 0 && (nationUnitCount <= 3 || nationRegionCount <= 2));
+    const isTinyNation = nationUnitCount > 0 && nationUnitCount <= 2;
+
+    if (isTinyNation && context.roundsResolved >= 1) {
+      return 'withdraw';
+    }
+
+    if (isSmallNation && context.roundsResolved >= 1) {
+      // Small nations should disengage quickly once combat has started.
+      if (context.attackerUnits <= context.defenderUnits) {
+        return 'withdraw';
+      }
+
+      if (context.attackerUnits <= 1) {
+        return 'withdraw';
+      }
+
+      if (context.attackerUnits <= context.defenderUnits + 1 && Math.random() < 0.85) {
+        return 'withdraw';
+      }
     }
 
     if (context.roundsResolved === 0) {
