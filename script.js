@@ -1,5 +1,6 @@
 (() => {
   const STORAGE_KEY = 'koc.gameState.v1';
+  const SCENARIO_MODE_KEY = 'koc.scenarioMode.v1';
   const RESET_SCROLL_RIGHT_KEY = 'koc.resetScrollRight';
   const BASE_WIDTH = 1035;
   const BASE_HEIGHT = 1590;
@@ -29,9 +30,16 @@
   const runFullAiTurnButton = document.getElementById('run-full-ai-turn');
   const currentNationLabel = document.getElementById('current-nation');
   const resetGameButton = document.getElementById('reset-game');
+  const scenarioDividedKingdomButton = document.getElementById('scenario-divided-kingdom');
+  const scenarioModeSelect = document.getElementById('scenario-mode');
   const combatStatusLabel = document.getElementById('combat-status');
   const vpSummaryLabel = document.getElementById('vp-summary');
   const vpTable = document.getElementById('vp-table');
+
+  const SCENARIO_MODES = {
+    STANDARD: 'standard',
+    DIVIDED_KINGDOM: 'divided-kingdom'
+  };
 
   const TOTAL_TURNS = 9;
   const HEBREW_DIVISION_TRIGGER_TURN = 5;
@@ -91,6 +99,9 @@
   ]);
 
   const invaderNations = new Set(['Egypt', 'Aram-Syria', 'Assyria', 'Assyrria', 'Babylonia']);
+  const DIVIDED_KINGDOM_SPACE_NAME_ALIASES = new Map([
+    ['Shephelah', 'Shephela']
+  ]);
   const VP_OBJECTIVE_NATIONS = [
     'Hebrew',
     'Canaan',
@@ -429,6 +440,7 @@
     sessionStorage.removeItem(RESET_SCROLL_RIGHT_KEY);
   }
 
+  const hadPersistedState = Boolean(localStorage.getItem(STORAGE_KEY));
   const state = loadState();
   let dragState = null;
   const combatDisplayBySpaceId = new Map();
@@ -1132,6 +1144,25 @@
 
   function saveState() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
+
+  function normalizeScenarioMode(value) {
+    return value === SCENARIO_MODES.DIVIDED_KINGDOM
+      ? SCENARIO_MODES.DIVIDED_KINGDOM
+      : SCENARIO_MODES.STANDARD;
+  }
+
+  function getScenarioMode() {
+    return normalizeScenarioMode(localStorage.getItem(SCENARIO_MODE_KEY));
+  }
+
+  function setScenarioMode(mode) {
+    const normalizedMode = normalizeScenarioMode(mode);
+    localStorage.setItem(SCENARIO_MODE_KEY, normalizedMode);
+    if (scenarioModeSelect) {
+      scenarioModeSelect.value = normalizedMode;
+    }
+    return normalizedMode;
   }
 
   function getCurrentPhase() {
@@ -2146,6 +2177,152 @@
       candidate = `${unitTypeId}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
     } while (state.units.some((unit) => unit.id === candidate));
     return candidate;
+  }
+
+  function getSpacesByBaseName() {
+    const grouped = new Map();
+
+    detectedSpaces.forEach((space) => {
+      const baseName = getSpaceBaseName(space);
+      if (!baseName) {
+        return;
+      }
+
+      if (!grouped.has(baseName)) {
+        grouped.set(baseName, []);
+      }
+
+      grouped.get(baseName).push(space);
+    });
+
+    grouped.forEach((spaces) => {
+      spaces.sort((first, second) => first.index - second.index);
+    });
+
+    return grouped;
+  }
+
+  function setupScenarioDividedKingdom(options = {}) {
+    const { setMode = true, showStatus = true } = options;
+
+    if (!detectedSpaces.length) {
+      setCombatStatus('Scenario setup is unavailable until the map finishes loading.', 'error', 7000);
+      return;
+    }
+
+    const actionPhaseIndex = PHASES.findIndex((phase) => phase.id === 'action');
+    if (actionPhaseIndex < 0) {
+      setCombatStatus('Scenario setup failed: action phase is unavailable.', 'error', 7000);
+      return;
+    }
+
+    const israeliteNationIndex = NATION_ORDER.findIndex((entry) => entry.nations.has('Israel'));
+    const spaceLookupByBaseName = getSpacesByBaseName();
+
+    const getPlacementSpaces = (names) => {
+      const resolved = [];
+
+      names.forEach((rawName) => {
+        const canonicalName = DIVIDED_KINGDOM_SPACE_NAME_ALIASES.get(rawName) || rawName;
+        const matches = spaceLookupByBaseName.get(canonicalName) || [];
+        matches.forEach((space) => resolved.push(space));
+      });
+
+      return resolved;
+    };
+
+    const scenarioSpecs = [
+      { nation: 'Ammon', count: 2, placements: ['Ammon'] },
+      { nation: 'Moab', count: 2, placements: ['Moab'] },
+      { nation: 'Edom', count: 2, placements: ['Edom'] },
+      { nation: 'Phoenicia', count: 2, placements: ['Phoenicia'] },
+      { nation: 'Philistia', count: 2, placements: ['Philistia'] },
+      {
+        nation: 'Judah',
+        count: 4,
+        placements: ['Bethel', 'Shephelah', 'Jerusalem', 'Bethlehem', 'Hebron', 'Negev', 'Jeshimon', 'Jericho']
+      },
+      {
+        nation: 'Israel',
+        count: 8,
+        placements: ['Samaria', 'Shechem', 'Jazer', 'Gilead', 'Geshur', 'Jezreel', 'Lower Galilee', 'Upper Galilee', 'Dan', 'Bashan', 'Dor', 'Joppa']
+      }
+    ];
+
+    const nextUnits = [];
+    const usedIds = new Set();
+
+    for (const spec of scenarioSpecs) {
+      const unitTypeId = spec.unitTypeId || getNationUnitTypeForGrowth(spec.nation, 'standard')?.id;
+      if (!unitTypeId || !unitTypeById.has(unitTypeId)) {
+        setCombatStatus(`Scenario setup failed: no unit type for ${spec.nation}.`, 'error', 7000);
+        return;
+      }
+
+      const placementSpaces = getPlacementSpaces(spec.placements);
+      if (!placementSpaces.length) {
+        setCombatStatus(`Scenario setup failed: no placement space found for ${spec.nation}.`, 'error', 7000);
+        return;
+      }
+
+      for (let i = 0; i < spec.count; i += 1) {
+        const targetSpace = placementSpaces[i % placementSpaces.length];
+        let unitId = '';
+        do {
+          unitId = createUniqueUnitId(unitTypeId);
+        } while (usedIds.has(unitId));
+        usedIds.add(unitId);
+
+        nextUnits.push({
+          id: unitId,
+          unitTypeId,
+          label: deriveUnitLabel(unitTypeId),
+          x: toBoardX(targetSpace.centroidX),
+          y: toBoardY(targetSpace.centroidY),
+          spaceId: targetSpace.id
+        });
+      }
+    }
+
+    state.currentTurn = 6;
+    state.currentPhaseIndex = actionPhaseIndex;
+    state.currentNationIndex = israeliteNationIndex >= 0 ? israeliteNationIndex : 0;
+    state.spawnedLeaderTurns = [];
+    state.spawnedReinforcementTurns = [];
+    state.pendingEntryCombatUnitIds = [];
+    state.pendingCombats = [];
+    state.processedGrowthTurns = [];
+    state.processedGrowthTurnKeys = [];
+    state.growthPointsByNation = {};
+    state.growthSummaryByTurnKey = {};
+    state.vassalByNation = {};
+    state.vassalTurnByNation = {};
+    state.requiredGarrisons = [];
+    state.retreatedUnitIds = [];
+    state.activatedUnitIds = [];
+    state.vpByNation = {};
+    state.vpLog = [];
+    state.vpScoredKeys = [];
+    state.vpRegionAwardedTurns = [];
+    state.vpNationTurnBaseline = {};
+    state.vpSeenNations = [];
+    state.hebrewDivisionResolved = true;
+    state.gameComplete = false;
+    state.units = nextUnits;
+    syncUnitCounts();
+
+    if (setMode) {
+      setScenarioMode(SCENARIO_MODES.DIVIDED_KINGDOM);
+    }
+
+    syncTurnState();
+    renderUnits();
+    updateTurnPhaseUi();
+    saveState();
+
+    if (showStatus) {
+      setCombatStatus('Scenario loaded: Divided Kingdom (Turn 6 Action Phase).', 'success', 7000);
+    }
   }
 
   function getUnitsInSpace(spaceId, excludedUnitId = '') {
@@ -6021,6 +6198,10 @@
     renderUnits();
     updateTurnPhaseUi();
     saveState();
+
+    if (!hadPersistedState && getScenarioMode() === SCENARIO_MODES.DIVIDED_KINGDOM) {
+      setupScenarioDividedKingdom({ setMode: false, showStatus: false });
+    }
   }
 
   mapCanvas.addEventListener('pointermove', onPointerMove);
@@ -6049,6 +6230,22 @@
       localStorage.removeItem(STORAGE_KEY);
       sessionStorage.setItem(RESET_SCROLL_RIGHT_KEY, '1');
       window.location.reload();
+    });
+  }
+
+  if (scenarioDividedKingdomButton) {
+    scenarioDividedKingdomButton.addEventListener('click', setupScenarioDividedKingdom);
+  }
+
+  if (scenarioModeSelect) {
+    scenarioModeSelect.value = getScenarioMode();
+    scenarioModeSelect.addEventListener('change', () => {
+      const selectedMode = setScenarioMode(scenarioModeSelect.value);
+      if (selectedMode === SCENARIO_MODES.DIVIDED_KINGDOM) {
+        setupScenarioDividedKingdom({ setMode: false, showStatus: true });
+      } else {
+        setCombatStatus('Scenario mode set to Standard. Click Reset to start a new standard game.', 'info', 8000);
+      }
     });
   }
 

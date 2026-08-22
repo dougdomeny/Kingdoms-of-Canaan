@@ -231,6 +231,28 @@ main {
   cursor: pointer;
 }
 
+#scenario-divided-kingdom {
+  border: 1px solid #5f3e26;
+  border-radius: 0.35rem;
+  background: #edd3a8;
+  color: #2b2118;
+  font-size: 0.86rem;
+  font-weight: 700;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+}
+
+#scenario-mode {
+  border: 1px solid #6a573e;
+  border-radius: 0.35rem;
+  background: #f7edd1;
+  color: #2b2118;
+  font-size: 0.86rem;
+  font-weight: 700;
+  padding: 0.27rem 0.45rem;
+  cursor: pointer;
+}
+
 #next-phase {
   border: 1px solid #3f4d25;
   border-radius: 0.35rem;
