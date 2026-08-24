@@ -30,7 +30,6 @@
   const runFullAiTurnButton = document.getElementById('run-full-ai-turn');
   const currentNationLabel = document.getElementById('current-nation');
   const resetGameButton = document.getElementById('reset-game');
-  const scenarioDividedKingdomButton = document.getElementById('scenario-divided-kingdom');
   const scenarioModeSelect = document.getElementById('scenario-mode');
   const combatStatusLabel = document.getElementById('combat-status');
   const vpSummaryLabel = document.getElementById('vp-summary');
@@ -57,7 +56,7 @@
     { label: 'Egyptian',    nations: new Set(['Egypt']) },
     { label: 'Aram-Syrian', nations: new Set(['Aram-Syria']) },
     { label: 'Samaritan',   nations: new Set(['Samaria']) },
-    { label: 'Assyrian',    nations: new Set(['Assyria', 'Assyrria']) },
+    { label: 'Assyrian',    nations: new Set(['Assyria']) },
     { label: 'Babylonian',  nations: new Set(['Babylonia']) }
   ];
 
@@ -87,18 +86,18 @@
     [5, { unitTypeId: 'hebrew-david', anchor: { x: 500, y: 953 }, preferredSpaceName: 'Jerusalem' }],
     [6, { unitTypeId: 'egypt-shishak', anchor: { x: 180, y: 1115 }, preferredSpaceName: 'Philistia' }],
     [7, { unitTypeId: 'aram-syria-hazael', anchor: { x: 835, y: 322 }, preferredSpaceName: 'Geshur' }],
-    [8, { unitTypeId: 'assyrria-shalmaneser', anchor: { x: 985, y: 334 }, preferredSpaceName: 'Argob' }],
+    [8, { unitTypeId: 'assyria-shalmaneser', anchor: { x: 985, y: 334 }, preferredSpaceName: 'Argob' }],
     [9, { unitTypeId: 'babylonia-nebuchadnezzar', anchor: { x: 977, y: 1115 }, preferredSpaceName: 'Eastern Desert' }]
   ]);
 
   const invadingReinforcementsByTurn = new Map([
-    [6, [{ unitTypeId: 'egypt-chariot', count: 4 }]],
-    [7, [{ unitTypeId: 'aram-syria', count: 4 }]],
-    [8, [{ unitTypeId: 'assyria', count: 8 }]],
-    [9, [{ unitTypeId: 'babylonia', count: 8 }]]
+    [6, [{ unitTypeId: 'egypt-chariot', count: 2 }]],
+    [7, [{ unitTypeId: 'aram-syria', count: 2 }]],
+    [8, [{ unitTypeId: 'assyria', count: 4 }]],
+    [9, [{ unitTypeId: 'babylonia', count: 4 }]]
   ]);
 
-  const invaderNations = new Set(['Egypt', 'Aram-Syria', 'Assyria', 'Assyrria', 'Babylonia']);
+  const invaderNations = new Set(['Egypt', 'Aram-Syria', 'Assyria', 'Babylonia']);
   const DIVIDED_KINGDOM_SPACE_NAME_ALIASES = new Map([
     ['Shephelah', 'Shephela']
   ]);
@@ -160,7 +159,6 @@
     ['Egypt', 34],
     ['Aram-Syria', 29],
     ['Assyria', 29],
-    ['Assyrria', 29],
     ['Babylonia', 29]
   ]);
 
@@ -231,7 +229,7 @@
     'Aram-Syria.png',
     'Assyria Sargon.png',
     'Assyria.png',
-    'Assyrria Shalmaneser.png',
+    'Assyria Shalmaneser.png',
     'Babylonia Nebuchadnezzar.png',
     'Babylonia.png',
     'Canaan.png',
@@ -1604,9 +1602,7 @@
       return ai.normalizeNationName(nationName);
     }
 
-    if (nationName === 'Assyrria') {
-      return 'Assyria';
-    }
+
 
     return nationName;
   }
@@ -2338,7 +2334,6 @@
       nation === 'Aram-Syria' ||
       nation === 'Aram' ||
       nation === 'Assyria' ||
-      nation === 'Assyrria' ||
       nation === 'Babylonia';
   }
 
@@ -4114,10 +4109,6 @@
     const targetWasEmpty = getUnitsInSpace(targetSpace.id).length === 0;
     snapUnitToSpace(unit, targetSpace);
 
-    if (targetWasEmpty) {
-      markGarrisonRequired(targetSpace.id, movingNation);
-    }
-
     const activatedSet = new Set(state.activatedUnitIds);
     activatedSet.add(unit.id);
     state.activatedUnitIds = Array.from(activatedSet);
@@ -4922,10 +4913,13 @@
   function isFriendlyPathSpaceForNation(spaceId, nationName) {
     const unitsInSpace = getUnitsInSpace(spaceId);
     if (!unitsInSpace.length) {
-      return false;
+      return true;  // Empty spaces are passable
     }
 
-    return unitsInSpace.every((unit) => getUnitNation(unit) === nationName);
+    return unitsInSpace.every((unit) => {
+      const unitNation = getUnitNation(unit);
+      return unitNation === nationName || state.vassalByNation[unitNation] === nationName;
+    });
   }
 
   function canReachSpaceThroughFriendlyPath(startSpace, targetSpace, nationName) {
@@ -6083,10 +6077,6 @@
           const originSpaceByUnitId = new Map(movedUnits.map((candidate) => [candidate.id, candidate.spaceId || targetSpace.id]));
           movedUnits.forEach((candidate) => snapUnitToSpace(candidate, targetSpace));
 
-          if (targetWasEmpty && movingNation) {
-            markGarrisonRequired(targetSpace.id, movingNation);
-          }
-
           const activatedSet = new Set(state.activatedUnitIds);
           movedUnits.forEach((candidate) => activatedSet.add(candidate.id));
           state.activatedUnitIds = Array.from(activatedSet);
@@ -6231,10 +6221,6 @@
       sessionStorage.setItem(RESET_SCROLL_RIGHT_KEY, '1');
       window.location.reload();
     });
-  }
-
-  if (scenarioDividedKingdomButton) {
-    scenarioDividedKingdomButton.addEventListener('click', setupScenarioDividedKingdom);
   }
 
   if (scenarioModeSelect) {

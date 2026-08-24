@@ -9,7 +9,7 @@
     ['Phoenicians', 'Phoenicia'],
     ['Philistines', 'Philistia'],
     ['Aram', 'Aram-Syria'],
-    ['Assyrria', 'Assyria'],
+    ['Assyria', 'Assyria'],
     ['Babylon', 'Babylonia']
   ]);
 
