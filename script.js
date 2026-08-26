@@ -1957,8 +1957,13 @@
       return;
     }
 
-    const entries = Object.entries(state.vpByNation || {})
-      .map(([nationName, points]) => [nationName, sanitizeInteger(points, -9999, 9999, 0)])
+    const vpNationNames = new Set([
+      ...VP_OBJECTIVE_NATIONS,
+      ...Object.keys(state.vpByNation || {}),
+      ...(state.vpSeenNations || [])
+    ]);
+    const entries = Array.from(vpNationNames)
+      .map((nationName) => [nationName, sanitizeInteger(state.vpByNation[nationName], -9999, 9999, 0)])
       .sort((first, second) => {
         if (second[1] !== first[1]) {
           return second[1] - first[1];
@@ -4553,6 +4558,27 @@
             const occupants = getUnitsInSpace(space.id);
             const enemyInTarget = occupants.filter((occupant) => canNationAttackDefender(unitNation, getUnitNation(occupant)));
             const friendlyInTarget = occupants.filter((occupant) => getUnitNation(occupant) === unitNation).length;
+            const friendlyInOrigin = getUnitsInSpace(current.spaceId)
+              .filter((occupant) => getUnitNation(occupant) === unitNation).length;
+            const forceStats = getActiveNationForceStats();
+            const tinyNationAttack = forceStats.nationUnitCount <= 2 && enemyInTarget.length > 0;
+            const pendingCombatForNation = state.pendingCombats.find(
+              (combat) => combat.attackerNation === unitNation
+            );
+            if (forceStats.nationUnitCount <= 2 && pendingCombatForNation &&
+              pendingCombatForNation.spaceId !== space.id) {
+              return;
+            }
+
+            if (tinyNationAttack) {
+              const canBringTwoAttackers = friendlyInTarget + friendlyInOrigin >= 2 &&
+                (!isGarrisonRequired(current.spaceId, unitNation) || friendlyInTarget > 0);
+              const reinforcesExistingAttack = pendingCombatForNation && pendingCombatForNation.spaceId === space.id;
+              if (!canBringTwoAttackers || (pendingCombatForNation && !reinforcesExistingAttack)) {
+                return;
+              }
+            }
+
             const candidate = {
               unitId: current.id,
               fromSpaceId: current.spaceId,
@@ -4568,7 +4594,6 @@
             const survivalPriority = objectives.surviveToTurn && state.currentTurn >= objectives.surviveToTurn.turn - 1
               ? 1
               : 0;
-            const forceStats = getActiveNationForceStats();
             const evaluation = ai.evaluateMove(candidate, {
               controlSpaceWeights: objectives.controlSpaceWeights,
               eliminateNations: objectives.eliminateNations,
@@ -4607,6 +4632,10 @@
 
         movedUnitIds.add(selected.unitId);
         movedCount += 1;
+
+        if (state.pendingCombats.some((combat) => activeNations.includes(combat.attackerNation))) {
+          break;
+        }
       }
 
       let combatIterations = 0;
