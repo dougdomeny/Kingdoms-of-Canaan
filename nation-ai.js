@@ -207,6 +207,12 @@
       const pressureBonus = context.replaceControl > 0 ? 2.8 : 1.5;
       score += pressureBonus;
       scoreParts.push({ label: 'enemy-contact', value: pressureBonus });
+
+      const massAttackBonus = Math.min(10, candidate.friendlyInTarget * 2.5);
+      if (massAttackBonus > 0) {
+        score += massAttackBonus;
+        scoreParts.push({ label: 'mass-attack', value: massAttackBonus });
+      }
     }
 
     if (isSmallNation && candidate.enemyInTarget > 0) {

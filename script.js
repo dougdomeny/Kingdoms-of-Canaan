@@ -4508,6 +4508,7 @@
 
     const primaryNation = ai.normalizeNationName(activeNations[0]);
     const objectives = ai.getNationObjectives(primaryNation, state.currentTurn, detectedSpaces);
+    const recentlyCapturedSpaceIds = new Set();
     let movedCount = 0;
 
     // Keep resolving movement/combat until no additional progress can be made.
@@ -4565,8 +4566,7 @@
             const pendingCombatForNation = state.pendingCombats.find(
               (combat) => combat.attackerNation === unitNation
             );
-            if (forceStats.nationUnitCount <= 2 && pendingCombatForNation &&
-              pendingCombatForNation.spaceId !== space.id) {
+            if (pendingCombatForNation && pendingCombatForNation.spaceId !== space.id) {
               return;
             }
 
@@ -4603,9 +4603,13 @@
               nationRegionCount: forceStats.nationRegionCount
             });
 
+            const continuingOffensiveScore = recentlyCapturedSpaceIds.has(current.spaceId) && enemyInTarget.length > 0
+              ? 12
+              : 0;
+
             candidates.push({
               ...candidate,
-              score: evaluation.score
+              score: evaluation.score + continuingOffensiveScore
             });
           });
         });
@@ -4615,7 +4619,17 @@
         }
 
         candidates.sort((first, second) => second.score - first.score);
-        const pickPool = candidates.slice(0, Math.min(3, candidates.length));
+        const requiredTurnOneEvacuationMoves = primaryNation === 'Hebrew' && state.currentTurn === 1
+          ? candidates.filter((candidate) => candidate.fromSpaceId === 'space-31')
+          : [];
+        const continuingOffensiveMoves = candidates.filter((candidate) =>
+          recentlyCapturedSpaceIds.has(candidate.fromSpaceId) && candidate.enemyInTarget > 0
+        );
+        const pickPool = requiredTurnOneEvacuationMoves.length
+          ? requiredTurnOneEvacuationMoves
+          : continuingOffensiveMoves.length
+            ? continuingOffensiveMoves
+          : candidates.slice(0, Math.min(3, candidates.length));
         const selected = pickPool[Math.floor(Math.random() * pickPool.length)] || candidates[0];
         const movingUnit = state.units.find((unit) => unit.id === selected.unitId);
         const targetSpace = spacesById.get(selected.targetSpaceId);
@@ -4632,10 +4646,6 @@
 
         movedUnitIds.add(selected.unitId);
         movedCount += 1;
-
-        if (state.pendingCombats.some((combat) => activeNations.includes(combat.attackerNation))) {
-          break;
-        }
       }
 
       let combatIterations = 0;
@@ -4679,6 +4689,16 @@
           }
 
           if (resolvePendingCombatByAi(pendingCombat, aiTurnSummary)) {
+            const battleEnded = !state.pendingCombats.some((combat) => combat.id === pendingCombat.id);
+            const attackerStillControlsSpace = getUnitsInSpace(pendingCombat.spaceId).some(
+              (unit) => getUnitNation(unit) === pendingCombat.attackerNation
+            );
+            const enemiesRemain = getUnitsInSpace(pendingCombat.spaceId).some(
+              (unit) => canNationAttackDefender(pendingCombat.attackerNation, getUnitNation(unit))
+            );
+            if (battleEnded && attackerStillControlsSpace && !enemiesRemain) {
+              recentlyCapturedSpaceIds.add(pendingCombat.spaceId);
+            }
             changedThisPass = true;
           }
         }
