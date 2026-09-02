@@ -4197,7 +4197,8 @@
       turn,
       nationLabel,
       attacksBySpaceId: new Map(),
-      lossesByNation: {}
+      lossesByNation: {},
+      vpGained: 0
     };
   }
 
@@ -4213,6 +4214,7 @@
         spaceId: pendingCombat.spaceId,
         spaceName: space ? space.name : pendingCombat.spaceId,
         spaceIndex: space ? space.index : 999,
+        order: summary.attacksBySpaceId.size,
         attackerNation: pendingCombat.attackerNation,
         attackerUnitIds: new Set(),
         defenderNations: new Set(),
@@ -4277,14 +4279,9 @@
       return 'No AI summary is available.';
     }
 
-    const lines = [`Turn ${summary.turn} - ${summary.nationLabel}`];
+    const lines = [`Turn ${summary.turn} - ${summary.nationLabel} (VP gained: ${summary.vpGained >= 0 ? '+' : ''}${summary.vpGained})`];
     const attackEntries = Array.from(summary.attacksBySpaceId.values())
-      .sort((first, second) => {
-        if (first.spaceIndex !== second.spaceIndex) {
-          return first.spaceIndex - second.spaceIndex;
-        }
-        return first.spaceName.localeCompare(second.spaceName);
-      });
+      .sort((first, second) => first.order - second.order);
 
     const totalAttackingUnits = attackEntries.reduce((sum, entry) => sum + entry.attackerUnitIds.size, 0);
     lines.push(`Attacks: ${totalAttackingUnits} unit${totalAttackingUnits === 1 ? '' : 's'} across ${attackEntries.length} region${attackEntries.length === 1 ? '' : 's'}.`);
@@ -4308,7 +4305,14 @@
           outcomeParts.push('attacker withdrew');
         }
         if (entry.endedByElimination) {
-          outcomeParts.push('one side eliminated');
+          const eliminatedNames = [];
+          if (entry.eliminatedAttacker) {
+            eliminatedNames.push(entry.attackerNation);
+          }
+          if (entry.eliminatedDefender) {
+            eliminatedNames.push(...(entry.defenderNations.size ? Array.from(entry.defenderNations).sort() : ['defender']));
+          }
+          outcomeParts.push(`${eliminatedNames.join(', ')} eliminated`);
         }
 
         const outcomeText = outcomeParts.length
@@ -4379,6 +4383,8 @@
     if (!result.attackerStillPresent || !result.defendersStillPresent) {
       if (summaryEntry) {
         summaryEntry.endedByElimination = true;
+        summaryEntry.eliminatedAttacker = !result.attackerStillPresent;
+        summaryEntry.eliminatedDefender = !result.defendersStillPresent;
       }
       if (result.attackerStillPresent && !result.defendersStillPresent) {
         markGarrisonRequired(pendingCombat.spaceId, pendingCombat.attackerNation);
@@ -4758,6 +4764,8 @@
     const startingTurn = state.currentTurn;
     const startingNationIndex = state.currentNationIndex;
     const startingNationLabel = getActiveNationEntry().label;
+    const startingNationNames = getActiveNationNames().map(normalizeNationForVp);
+    const vpBefore = startingNationNames.reduce((sum, nation) => sum + (state.vpByNation[nation] || 0), 0);
     const aiTurnSummary = createAiTurnSummary(startingTurn, startingNationLabel);
     let safety = 0;
 
@@ -4779,6 +4787,9 @@
 
       safety += 1;
     }
+
+    const vpAfter = startingNationNames.reduce((sum, nation) => sum + (state.vpByNation[nation] || 0), 0);
+    aiTurnSummary.vpGained = vpAfter - vpBefore;
 
     showAiTurnSummary(buildAiTurnSummaryText(aiTurnSummary), 'Run AI Turn Summary');
   }
