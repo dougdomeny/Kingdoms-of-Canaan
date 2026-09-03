@@ -68,21 +68,25 @@
     },
     Egypt: {
       replaceControl: 2,
-      controlSpaces: { Jerusalem: 1 }
+      controlSpaces: { Jerusalem: 1, Philistia: 1 },
+      pointsPerDestroyedOrSubmittedUnit: 1
     },
     'Aram-Syria': {
       replaceControl: 2,
-      controlSpaces: { Gilead: 1 }
+      controlSpaces: { Bashan: 1, Dan: 1, Gilead: 1, Shechem: 1, Samaria: 1 },
+      pointsPerDestroyedOrSubmittedUnit: 1
     },
     Assyria: {
       replaceControl: 3,
       controlSpaces: { Samaria: 1 },
-      eliminateNations: { Israel: 2 }
+      eliminateNations: { Israel: 2 },
+      pointsPerDestroyedOrSubmittedUnit: 1
     },
     Babylonia: {
       replaceControl: 3,
       controlSpaces: { Jerusalem: 2 },
-      eliminateNations: { Judah: 1 }
+      eliminateNations: { Judah: 1 },
+      pointsPerDestroyedOrSubmittedUnit: 1
     }
   };
 
@@ -166,6 +170,7 @@
       controlSpaces: { ...(profile.controlSpaces || {}) },
       eliminateNations: { ...(profile.eliminateNations || {}) },
       replaceControl: Number(profile.replaceControl || 0),
+      pointsPerDestroyedOrSubmittedUnit: Number(profile.pointsPerDestroyedOrSubmittedUnit || 0),
       surviveToTurn: profile.surviveToTurn || null,
       leaderObjectivesByTurn: { ...(profile.leaderObjectivesByTurn || {}) }
     };

@@ -568,6 +568,26 @@ main {
   cursor: default;
 }
 
+.ai-moving-unit {
+  pointer-events: none;
+  transition: left 1s linear, top 1s linear;
+  z-index: 30 !important;
+}
+
+.ai-combat-message {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  z-index: 31;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid #3f2b10;
+  border-radius: 4px;
+  background: rgba(247, 237, 209, 0.96);
+  color: #2b2118;
+  font-size: calc(0.12in * var(--map-zoom));
+  font-weight: 700;
+  pointer-events: none;
+}
+
 .combat-action-button {
   position: absolute;
   transform: translate(-100%, -50%);
