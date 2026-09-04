@@ -557,7 +557,7 @@
     window.setTimeout(() => messageElement.remove(), 2000);
   }
 
-  function animateAiUnitMove(unitId, targetSpace) {
+  function animateAiUnitMove(unitId, targetSpace, hopSpaces = null) {
     const source = mapCanvas.querySelector(`[data-unit-id="${unitId}"]`);
     if (!source || !targetSpace) {
       return Promise.resolve();
@@ -569,16 +569,71 @@
     movingCounter.style.top = source.style.top;
     mapCanvas.appendChild(movingCounter);
 
-    return new Promise((resolve) => {
+    const waypoints = Array.isArray(hopSpaces) && hopSpaces.length ? hopSpaces : [targetSpace];
+    const hopDurationMs = 1000 / waypoints.length;
+
+    const animateToWaypoint = (index) => new Promise((resolve) => {
+      const waypoint = waypoints[index];
       requestAnimationFrame(() => {
-        movingCounter.style.left = `${Math.round(toBoardX(targetSpace.centroidX) * state.zoom)}px`;
-        movingCounter.style.top = `${Math.round(toBoardY(targetSpace.centroidY) * state.zoom)}px`;
+        movingCounter.style.transition = `left ${hopDurationMs}ms linear, top ${hopDurationMs}ms linear`;
+        movingCounter.style.left = `${Math.round(toBoardX(waypoint.centroidX) * state.zoom)}px`;
+        movingCounter.style.top = `${Math.round(toBoardY(waypoint.centroidY) * state.zoom)}px`;
       });
-      window.setTimeout(() => {
-        movingCounter.remove();
-        resolve();
-      }, 1000);
+      window.setTimeout(resolve, hopDurationMs);
     });
+
+    return waypoints
+      .reduce((chain, _waypoint, index) => chain.then(() => animateToWaypoint(index)), Promise.resolve())
+      .then(() => {
+        movingCounter.remove();
+      });
+  }
+
+  function getFriendlyPathHopSpaces(startSpace, targetSpace, nationName) {
+    if (!startSpace || !targetSpace || !nationName) {
+      return null;
+    }
+
+    const allowedNeighbors = adjacentSpaceLookup.get(startSpace.index);
+    if (allowedNeighbors && allowedNeighbors.has(targetSpace.index)) {
+      return [targetSpace];
+    }
+
+    const visited = new Set([startSpace.id]);
+    const queue = [startSpace];
+    const parentBySpaceId = new Map();
+
+    while (queue.length) {
+      const current = queue.shift();
+      const neighbors = adjacentSpaceLookup.get(current.index) || new Set();
+
+      for (const neighborIndex of neighbors) {
+        const nextSpace = findSpaceByIndex(neighborIndex);
+        if (!nextSpace || visited.has(nextSpace.id)) {
+          continue;
+        }
+
+        if (nextSpace.id === targetSpace.id) {
+          const hops = [nextSpace];
+          let hopCursor = current;
+          while (hopCursor && hopCursor.id !== startSpace.id) {
+            hops.unshift(hopCursor);
+            hopCursor = parentBySpaceId.get(hopCursor.id) || null;
+          }
+          return hops;
+        }
+
+        if (!isFriendlyPathSpaceForNation(nextSpace.id, nationName)) {
+          continue;
+        }
+
+        visited.add(nextSpace.id);
+        parentBySpaceId.set(nextSpace.id, current);
+        queue.push(nextSpace);
+      }
+    }
+
+    return null;
   }
 
   function waitForAiCombatStep() {
@@ -3313,6 +3368,16 @@
     const defenderDice = buildCombatDice(defenderDiceUnits, space, defenderHasLeader);
     const roundLosses = resolveCombatDiceMatchups(attackerDice, defenderDice);
     const displayDiceCount = Math.min(attackerDice.length, defenderDice.length);
+    const visibleAttackerDice = attackerDice.slice(0, displayDiceCount).map((die) => die.value);
+    const visibleDefenderDice = defenderDice.slice(0, displayDiceCount).map((die) => die.value);
+    const visibleAttackerText = formatGroupedDice(visibleAttackerDice);
+    const visibleDefenderText = formatGroupedDice(visibleDefenderDice);
+    const visibleDiceMessage = [
+      visibleAttackerText ? `${attackerNation} dice: ${visibleAttackerText}.` : '',
+      visibleDefenderText ? `${defenderNation} dice: ${visibleDefenderText}.` : ''
+    ]
+      .filter(Boolean)
+      .join(' ');
     const hiddenAttackerDice = attackerDice.slice(displayDiceCount).map((die) => die.value);
     const hiddenDefenderDice = defenderDice.slice(displayDiceCount).map((die) => die.value);
     const hiddenAttackerText = formatGroupedDice(hiddenAttackerDice);
@@ -3356,10 +3421,12 @@
             ? `${leaderOnlyNationsRemoved.join(' and ')} leader${leaderOnlyNationsRemoved.length === 1 ? ' was' : 's were'} removed because leader-only forces cannot remain after combat.`
             : '',
           ...leaderEffectMessages,
+          visibleDiceMessage,
           hiddenDiceMessage
         ].join(' ')
       : [
           ...leaderEffectMessages,
+          visibleDiceMessage,
           hiddenDiceMessage
         ]
           .filter(Boolean)
@@ -3513,27 +3580,25 @@
       setCombatStatus('Combat round resolved. You may resolve another round or withdraw.', 'success');
     }
 
-    if (showCombatToggle?.checked) {
-      combatDisplayBySpaceId.delete(resolvedCombatSpaceId);
-    }
-
     cleanPendingCombats();
     renderUnits();
     saveState();
 
-    if (result.casualtiesRemoved > 0 || result.hiddenDiceMessage) {
+    const shouldShowRoundNotice = result.casualtiesRemoved > 0 || result.hiddenDiceMessage || showCombatToggle?.checked;
+    if (shouldShowRoundNotice) {
       showCombatNotice(
-        result.casualtyMessage,
+        result.casualtyMessage || 'Combat round resolved.',
         () => {
           combatDisplayBySpaceId.delete(resolvedCombatSpaceId);
           renderUnits();
           saveState();
+          continueAiCombatStep();
         },
         resolvedCombatSpaceId
       );
+    } else {
+      continueAiCombatStep();
     }
-
-    continueAiCombatStep();
   }
 
   function handleWithdrawClick(spaceId) {
@@ -4795,6 +4860,7 @@
         }
 
         const hostileEntry = selected.enemyInTarget > 0;
+        const originSpaceForAnimation = spacesById.get(selected.fromSpaceId) || null;
         const summaryEntry = hostileEntry
           ? ensureAiTurnAttackSummary(aiTurnSummary, {
               spaceId: targetSpace.id,
@@ -4828,7 +4894,10 @@
         }
         movedCount += 1;
         if (showCombatToggle?.checked) {
-          await animateAiUnitMove(movingUnit.id, targetSpace);
+          const hopSpaces = originSpaceForAnimation
+            ? getFriendlyPathHopSpaces(originSpaceForAnimation, targetSpace, getUnitNation(movingUnit))
+            : null;
+          await animateAiUnitMove(movingUnit.id, targetSpace, hopSpaces);
           renderUnits();
         }
       }
