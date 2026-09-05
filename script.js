@@ -3355,9 +3355,9 @@
       };
     }
 
-    const attackerHasLeader = attackerUnits.some((unit) => {
+    const attackerHasLeader = getUnitsInSpace(spaceId).some((unit) => {
       const unitType = unitTypeById.get(unit.unitTypeId);
-      return isLeaderUnitType(unitType);
+      return getUnitNation(unit) === attackerNation && isLeaderUnitType(unitType);
     });
     const defenderHasLeader = defenderUnits.some((unit) => {
       const unitType = unitTypeById.get(unit.unitTypeId);
@@ -4293,9 +4293,6 @@
       return false;
     }
 
-    const targetWasEmpty = getUnitsInSpace(targetSpace.id).length === 0;
-    snapUnitToSpace(unit, targetSpace);
-
     const accompanyingLeader = state.units.find((candidate) => {
       const candidateType = unitTypeById.get(candidate.unitTypeId);
       return candidate.spaceId === originSpaceId &&
@@ -4303,6 +4300,9 @@
         isLeaderUnitType(candidateType) &&
         canUnitMoveToSpace(candidate, targetSpace);
     });
+
+    const targetWasEmpty = getUnitsInSpace(targetSpace.id).length === 0;
+    snapUnitToSpace(unit, targetSpace);
     if (accompanyingLeader) {
       snapUnitToSpace(accompanyingLeader, targetSpace);
     }
