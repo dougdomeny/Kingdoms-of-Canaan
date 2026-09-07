@@ -22,12 +22,11 @@
 
   const OBJECTIVES = {
     Hebrew: {
-      controlSpaces: { Jerusalem: 2, Hebron: 1, Bethel: 1 },
+      controlSpaces: { Hebron: 1, Bethel: 1 },
       eliminateNations: { Canaan: 2 },
-      surviveToTurn: { turn: 9, points: 2 },
       leaderObjectivesByTurn: {
         1: { controlSpaces: { Jericho: 1, Bethel: 1 } },
-        5: { controlSpaces: { Jerusalem: 1 } }
+        5: { controlSpaces: { Jerusalem: 2 } }
       }
     },
     Canaan: {
@@ -35,8 +34,8 @@
       surviveToTurn: { turn: 5, points: 2 }
     },
     Amorite: {
-      controlSpaces: { Heshbon: 1, Rabbah: 1, Gilead: 1 },
-      surviveToTurn: { turn: 6, points: 2 }
+      controlSpaces: { Bashan: 1, Geshur: 1, Gilead: 1 },
+      surviveToTurn: { turn: 4, points: 2 }
     },
     Ammon: {
       controlSpaces: { Rabbah: 1, Gilead: 1 },

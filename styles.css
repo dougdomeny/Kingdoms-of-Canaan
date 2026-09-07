@@ -253,17 +253,6 @@ main {
   cursor: pointer;
 }
 
-#skip-turn {
-  border: 1px solid #5b4f34;
-  border-radius: 0.35rem;
-  background: #e7d8ad;
-  color: #332714;
-  font-size: 0.86rem;
-  font-weight: 700;
-  padding: 0.3rem 0.7rem;
-  cursor: pointer;
-}
-
 #run-ai-turn {
   border: 1px solid #27425f;
   border-radius: 0.35rem;
@@ -286,12 +275,19 @@ main {
   cursor: pointer;
 }
 
-#next-phase:hover:not(:disabled) {
-  background: #c2d199;
+#run-entire-game {
+  border: 1px solid #6d3c16;
+  border-radius: 0.35rem;
+  background: #f0d0ad;
+  color: #45260f;
+  font-size: 0.86rem;
+  font-weight: 700;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
 }
 
-#skip-turn:hover:not(:disabled) {
-  background: #dccb97;
+#next-phase:hover:not(:disabled) {
+  background: #c2d199;
 }
 
 #run-ai-turn:hover:not(:disabled) {
@@ -302,12 +298,11 @@ main {
   background: #b9dcb5;
 }
 
-#next-phase:disabled {
-  opacity: 0.65;
-  cursor: default;
+#run-entire-game:hover:not(:disabled) {
+  background: #e7bc8e;
 }
 
-#skip-turn:disabled {
+#next-phase:disabled {
   opacity: 0.65;
   cursor: default;
 }
@@ -318,6 +313,11 @@ main {
 }
 
 #run-full-ai-turn:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+#run-entire-game:disabled {
   opacity: 0.65;
   cursor: default;
 }

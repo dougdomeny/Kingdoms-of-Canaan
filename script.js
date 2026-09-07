@@ -26,15 +26,16 @@
   const currentPhaseLabel = document.getElementById('current-phase');
   const phaseHelpLabel = document.getElementById('phase-help');
   const nextPhaseButton = document.getElementById('next-phase');
-  const skipTurnButton = document.getElementById('skip-turn');
   const runAiTurnButton = document.getElementById('run-ai-turn');
   const runFullAiTurnButton = document.getElementById('run-full-ai-turn');
+  const runEntireGameButton = document.getElementById('run-entire-game');
   const currentNationLabel = document.getElementById('current-nation');
   const resetGameButton = document.getElementById('reset-game');
   const scenarioModeSelect = document.getElementById('scenario-mode');
   const combatStatusLabel = document.getElementById('combat-status');
   const vpSummaryLabel = document.getElementById('vp-summary');
   const vpTable = document.getElementById('vp-table');
+  const vpPanel = document.getElementById('vp-panel');
 
   const SCENARIO_MODES = {
     STANDARD: 'standard',
@@ -118,6 +119,13 @@
     'Assyria',
     'Babylonia'
   ];
+  const HOME_REGION_TURN_VP_OBJECTIVES = new Map([
+    ['Ammon', { spaceId: 'space-30', regionName: 'Ammon', points: 1 }],
+    ['Moab', { spaceId: 'space-26', regionName: 'Moab', points: 1 }],
+    ['Edom', { spaceId: 'space-33', regionName: 'Edom', points: 1 }],
+    ['Phoenicia', { spaceId: 'space-1', regionName: 'Phoenicia', points: 1 }],
+    ['Philistia', { spaceId: 'space-20', regionName: 'Philistia', points: 1 }]
+  ]);
   const REGION_RULES_BY_NAME = new Map([
     ['Dan', { growth: 1, terrain: 'standard' }],
     ['Phoenicia', { growth: 2, terrain: 'plains' }],
@@ -162,6 +170,7 @@
     ['Assyria', 29],
     ['Babylonia', 29]
   ]);
+  const STAGING_SPACE_IDS = new Set(['space-29', 'space-31']);
 
   const regionLabelAnchors = [
     { name: 'Dan', x: 664, y: 96 },
@@ -1702,6 +1711,15 @@
       landPoints[overlordNation] = (landPoints[overlordNation] || 0) + growthPoints;
     });
 
+    Object.values(state.vassalByNation || {}).forEach((overlordNation) => {
+      if (!overlordNation) {
+        return;
+      }
+
+      const normalizedOverlord = getOverlordNation(overlordNation);
+      landPoints[normalizedOverlord] = (landPoints[normalizedOverlord] || 0) + 1;
+    });
+
     return landPoints;
   }
 
@@ -1844,6 +1862,10 @@
     const normalizedControlledSpaces = getControlledSpacesByNationNormalized();
 
     VP_OBJECTIVE_NATIONS.forEach((nationName) => {
+      if (HOME_REGION_TURN_VP_OBJECTIVES.has(normalizeNationForVp(nationName))) {
+        return;
+      }
+
       const profile = getNationObjectiveProfile(nationName);
       if (!profile || !profile.controlSpaces) {
         return;
@@ -1868,6 +1890,32 @@
           `objective|control|${normalizeNationForVp(nationName)}|${resolvedSpaceName}`
         );
       });
+    });
+  }
+
+  function scoreHomeRegionTurnObjectivesForActiveNation(turn) {
+    getActiveNationNames().forEach((nationName) => {
+      const normalizedNation = normalizeNationForVp(nationName);
+      const objective = HOME_REGION_TURN_VP_OBJECTIVES.get(normalizedNation);
+      if (!objective) {
+        return;
+      }
+
+      const hasHomeUnit = getUnitsInSpace(objective.spaceId).some((unit) =>
+        normalizeNationForVp(getUnitNation(unit)) === normalizedNation
+      );
+      if (!hasHomeUnit) {
+        return;
+      }
+
+      addVp(
+        normalizedNation,
+        objective.points,
+        'objective-home-region-turn',
+        `${normalizedNation} has a unit in ${objective.regionName} at end of Turn ${turn}`,
+        turn,
+        `objective|home-region-turn|${normalizedNation}|turn:${turn}`
+      );
     });
   }
 
@@ -2284,19 +2332,19 @@
             : phase.nextLabel;
     }
 
-    if (skipTurnButton) {
-      skipTurnButton.disabled = state.gameComplete;
-      skipTurnButton.textContent = state.gameComplete ? 'Game Complete' : 'Skip Turn';
-    }
-
     if (runAiTurnButton) {
       runAiTurnButton.disabled = state.gameComplete;
-      runAiTurnButton.textContent = state.gameComplete ? 'Game Complete' : 'Run AI Turn';
+      runAiTurnButton.textContent = state.gameComplete ? 'Game Complete' : 'Run Nation';
     }
 
     if (runFullAiTurnButton) {
       runFullAiTurnButton.disabled = state.gameComplete;
-      runFullAiTurnButton.textContent = state.gameComplete ? 'Game Complete' : 'Run Full AI Turn';
+      runFullAiTurnButton.textContent = state.gameComplete ? 'Game Complete' : 'Run Full Turn';
+    }
+
+    if (runEntireGameButton) {
+      runEntireGameButton.disabled = state.gameComplete;
+      runEntireGameButton.textContent = state.gameComplete ? 'Game Complete' : 'Run Entire Game';
     }
 
     updateVpUi();
@@ -4145,6 +4193,7 @@
     } else if (phase.id === 'action') {
       scoreReplaceControlObjectivesForActiveNation(state.currentTurn);
       scoreLeaderObjectivesForCurrentTurn(state.currentTurn);
+      scoreHomeRegionTurnObjectivesForActiveNation(state.currentTurn);
       scorePersistentControlObjectives(state.currentTurn);
       scoreEliminationObjectives(state.currentTurn);
       state.currentPhaseIndex = 2;
@@ -4166,7 +4215,6 @@
       }
 
       if (!nextPlayable || nextPlayable.turn > state.currentTurn) {
-        awardRegionVpForTurn(state.currentTurn);
         scoreSurvivalObjectives(state.currentTurn);
       }
 
@@ -5087,6 +5135,38 @@
     }
   }
 
+  async function runEntireGame() {
+    if (state.gameComplete) {
+      if (vpPanel) {
+        vpPanel.open = true;
+      }
+      return;
+    }
+
+    if (!getAiEngine()) {
+      setCombatStatus('AI module is unavailable.', 'error');
+      return;
+    }
+
+    let safety = 0;
+    while (!state.gameComplete && safety < TOTAL_TURNS + 2) {
+      const startingTurn = state.currentTurn;
+      await runFullAiTurn();
+      if (!state.gameComplete && state.currentTurn <= startingTurn) {
+        break;
+      }
+      safety += 1;
+    }
+
+    if (vpPanel) {
+      vpPanel.open = true;
+    }
+
+    if (state.gameComplete) {
+      setCombatStatus('AI completed the entire game.', 'success', 9000);
+    }
+  }
+
   function updateMouseCoordsText(sourceX, sourceY) {
     if (!mouseCoords) {
       return;
@@ -5210,6 +5290,10 @@
       return true;
     }
 
+    if (STAGING_SPACE_IDS.has(targetSpace.id)) {
+      return false;
+    }
+
     if (isLeaderUnitType(unitType)) {
       const companionUnits = getUnitsMovedByDrag(unit, false).filter((candidate) => candidate.id !== unit.id);
       if (!companionUnits.length) {
@@ -5262,6 +5346,10 @@
       for (const neighborIndex of neighbors) {
         const nextSpace = findSpaceByIndex(neighborIndex);
         if (!nextSpace || visited.has(nextSpace.id)) {
+          continue;
+        }
+
+        if (STAGING_SPACE_IDS.has(nextSpace.id)) {
           continue;
         }
 
@@ -6160,8 +6248,16 @@
       const pendingCombat = getPendingCombatForSpace(space.id);
       const showWithdraw = Boolean(pendingCombat && pendingCombat.roundsResolved > 0);
       const activeCombat = pendingCombat ? isNationActive(pendingCombat.attackerNation) : false;
-      const canResolveManualCombat = !pendingCombat && getUnitsInSpace(space.id).some((unit) => isNationActive(getUnitNation(unit)));
+      const canResolveManualCombat = !pendingCombat && getUnitsInSpace(space.id).some((unit) => {
+        const activeNation = getUnitNation(unit);
+        return isNationActive(activeNation) && getUnitsInSpace(space.id).some((occupant) =>
+          canNationAttackDefender(activeNation, getUnitNation(occupant))
+        );
+      });
       const combatEnabled = getCurrentPhase().id === 'action' && (activeCombat || canResolveManualCombat);
+      if (!combatEnabled) {
+        return;
+      }
       const buttonY = Math.round(toBoardY(space.centroidY) * state.zoom);
       const buttonX = Math.round(toBoardX(space.centroidX) * state.zoom - UNIT_SIZE_PX * state.zoom * 0.9);
 
@@ -6561,16 +6657,16 @@
     nextPhaseButton.addEventListener('click', advanceTurnPhase);
   }
 
-  if (skipTurnButton) {
-    skipTurnButton.addEventListener('click', skipTurn);
-  }
-
   if (runAiTurnButton) {
     runAiTurnButton.addEventListener('click', runAiTurn);
   }
 
   if (runFullAiTurnButton) {
     runFullAiTurnButton.addEventListener('click', runFullAiTurn);
+  }
+
+  if (runEntireGameButton) {
+    runEntireGameButton.addEventListener('click', runEntireGame);
   }
 
   syncMapSize();
