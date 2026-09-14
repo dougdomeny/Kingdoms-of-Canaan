@@ -48,6 +48,12 @@ main {
   background: rgba(255, 245, 210, 0.7);
 }
 
+.ai-run-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
 .turn-status-summary {
   display: flex;
   flex-wrap: wrap;
@@ -253,18 +259,18 @@ main {
   cursor: pointer;
 }
 
-#run-ai-turn {
+#ai-run-action-select {
   border: 1px solid #27425f;
   border-radius: 0.35rem;
   background: #c7deef;
   color: #173046;
   font-size: 0.86rem;
   font-weight: 700;
-  padding: 0.3rem 0.7rem;
+  padding: 0.3rem 0.5rem;
   cursor: pointer;
 }
 
-#run-full-ai-turn {
+#ai-run-action-button {
   border: 1px solid #1f5a39;
   border-radius: 0.35rem;
   background: #cde8cb;
@@ -275,31 +281,16 @@ main {
   cursor: pointer;
 }
 
-#run-entire-game {
-  border: 1px solid #6d3c16;
-  border-radius: 0.35rem;
-  background: #f0d0ad;
-  color: #45260f;
-  font-size: 0.86rem;
-  font-weight: 700;
-  padding: 0.3rem 0.7rem;
-  cursor: pointer;
-}
-
 #next-phase:hover:not(:disabled) {
   background: #c2d199;
 }
 
-#run-ai-turn:hover:not(:disabled) {
+#ai-run-action-select:hover:not(:disabled) {
   background: #b3d2e8;
 }
 
-#run-full-ai-turn:hover:not(:disabled) {
+#ai-run-action-button:hover:not(:disabled) {
   background: #b9dcb5;
-}
-
-#run-entire-game:hover:not(:disabled) {
-  background: #e7bc8e;
 }
 
 #next-phase:disabled {
@@ -307,17 +298,13 @@ main {
   cursor: default;
 }
 
-#run-ai-turn:disabled {
+#ai-run-action-select:disabled,
+option:disabled {
   opacity: 0.65;
   cursor: default;
 }
 
-#run-full-ai-turn:disabled {
-  opacity: 0.65;
-  cursor: default;
-}
-
-#run-entire-game:disabled {
+#ai-run-action-button:disabled {
   opacity: 0.65;
   cursor: default;
 }

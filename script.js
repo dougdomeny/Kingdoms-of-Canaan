@@ -1,6 +1,7 @@
 (() => {
   const STORAGE_KEY = 'koc.gameState.v1';
   const SCENARIO_MODE_KEY = 'koc.scenarioMode.v1';
+  const AI_RUN_ACTION_KEY = 'koc.aiRunAction.v1';
   const RESET_SCROLL_RIGHT_KEY = 'koc.resetScrollRight';
   const BASE_WIDTH = 1035;
   const BASE_HEIGHT = 1590;
@@ -26,9 +27,8 @@
   const currentPhaseLabel = document.getElementById('current-phase');
   const phaseHelpLabel = document.getElementById('phase-help');
   const nextPhaseButton = document.getElementById('next-phase');
-  const runAiTurnButton = document.getElementById('run-ai-turn');
-  const runFullAiTurnButton = document.getElementById('run-full-ai-turn');
-  const runEntireGameButton = document.getElementById('run-entire-game');
+  const aiRunActionSelect = document.getElementById('ai-run-action-select');
+  const aiRunActionButton = document.getElementById('ai-run-action-button');
   const currentNationLabel = document.getElementById('current-nation');
   const resetGameButton = document.getElementById('reset-game');
   const scenarioModeSelect = document.getElementById('scenario-mode');
@@ -44,6 +44,19 @@
 
   const TOTAL_TURNS = 9;
   const HEBREW_DIVISION_TRIGGER_TURN = 5;
+
+  const AI_RUN_ACTIONS = [
+    { id: 'run-nation', label: 'Run Nation' },
+    { id: 'run-full-turn', label: 'Run Full Turn' },
+    { id: 'run-entire-game', label: 'Run Entire Game' },
+    { id: 'to-turn-3', label: 'To 3 (Philistines)', targetTurn: 3, targetNation: 'Philistia' },
+    { id: 'to-turn-5', label: 'To 5 (David, Hebrew)', targetTurn: 5, targetNation: 'Hebrew' },
+    { id: 'to-turn-6', label: 'To 6 (Shishak, Egypt)', targetTurn: 6, targetNation: 'Egypt' },
+    { id: 'to-turn-7', label: 'To 7 (Hazael, Aram)', targetTurn: 7, targetNation: 'Aram-Syria' },
+    { id: 'to-turn-8', label: 'To 8 (Sargon, Assyria)', targetTurn: 8, targetNation: 'Assyria' },
+    { id: 'to-turn-9', label: 'To 9 (Nebuchadnezzar, Babylon)', targetTurn: 9, targetNation: 'Babylonia' }
+  ];
+
   const NATION_ORDER = [
     { label: 'Hebrew',      nations: new Set(['Hebrew']) },
     { label: 'Israelite',   nations: new Set(['Israel']) },
@@ -2332,20 +2345,7 @@
             : phase.nextLabel;
     }
 
-    if (runAiTurnButton) {
-      runAiTurnButton.disabled = state.gameComplete;
-      runAiTurnButton.textContent = state.gameComplete ? 'Game Complete' : 'Run Nation';
-    }
-
-    if (runFullAiTurnButton) {
-      runFullAiTurnButton.disabled = state.gameComplete;
-      runFullAiTurnButton.textContent = state.gameComplete ? 'Game Complete' : 'Run Full Turn';
-    }
-
-    if (runEntireGameButton) {
-      runEntireGameButton.disabled = state.gameComplete;
-      runEntireGameButton.textContent = state.gameComplete ? 'Game Complete' : 'Run Entire Game';
-    }
+    updateAiRunControlUi();
 
     updateVpUi();
   }
@@ -5167,6 +5167,117 @@
     }
   }
 
+  function hasReachedTargetNationTurn(targetTurn, targetNation) {
+    if (state.currentTurn > targetTurn) {
+      return true;
+    }
+
+    if (state.currentTurn < targetTurn) {
+      return false;
+    }
+
+    const targetNationIndex = NATION_ORDER.findIndex((entry) => entry.nations.has(targetNation));
+    return targetNationIndex === -1 || state.currentNationIndex >= targetNationIndex;
+  }
+
+  async function runUntilNationTurn(targetTurn, targetNation) {
+    if (state.gameComplete || hasReachedTargetNationTurn(targetTurn, targetNation)) {
+      return;
+    }
+
+    if (!getAiEngine()) {
+      setCombatStatus('AI module is unavailable.', 'error');
+      return;
+    }
+
+    let safety = 0;
+    const maxSafety = (TOTAL_TURNS + 2) * NATION_ORDER.length;
+    while (!state.gameComplete && !hasReachedTargetNationTurn(targetTurn, targetNation) && safety < maxSafety) {
+      const startingTurn = state.currentTurn;
+      const startingNationIndex = state.currentNationIndex;
+      await runAiTurn();
+      if (!state.gameComplete && state.currentTurn === startingTurn && state.currentNationIndex === startingNationIndex) {
+        break;
+      }
+      safety += 1;
+    }
+
+    if (state.gameComplete && vpPanel) {
+      vpPanel.open = true;
+    }
+  }
+
+  function getSelectedAiRunAction() {
+    const selectedId = aiRunActionSelect ? aiRunActionSelect.value : null;
+    return AI_RUN_ACTIONS.find((action) => action.id === selectedId) || AI_RUN_ACTIONS[0];
+  }
+
+  function populateAiRunActionSelect() {
+    if (!aiRunActionSelect) {
+      return;
+    }
+
+    let storedActionId = null;
+    try {
+      storedActionId = localStorage.getItem(AI_RUN_ACTION_KEY);
+    } catch (error) {
+      storedActionId = null;
+    }
+
+    aiRunActionSelect.innerHTML = '';
+    AI_RUN_ACTIONS.forEach((action) => {
+      const option = document.createElement('option');
+      option.value = action.id;
+      option.textContent = action.label;
+      aiRunActionSelect.appendChild(option);
+    });
+
+    if (storedActionId && AI_RUN_ACTIONS.some((action) => action.id === storedActionId)) {
+      aiRunActionSelect.value = storedActionId;
+    }
+  }
+
+  function updateAiRunControlUi() {
+    if (aiRunActionSelect) {
+      Array.from(aiRunActionSelect.options).forEach((option) => {
+        const action = AI_RUN_ACTIONS.find((entry) => entry.id === option.value);
+        option.disabled = Boolean(action && action.targetTurn && hasReachedTargetNationTurn(action.targetTurn, action.targetNation));
+      });
+
+      if (aiRunActionSelect.options[aiRunActionSelect.selectedIndex]?.disabled) {
+        const firstEnabled = Array.from(aiRunActionSelect.options).find((option) => !option.disabled);
+        if (firstEnabled) {
+          aiRunActionSelect.value = firstEnabled.value;
+        }
+      }
+    }
+
+    if (aiRunActionButton) {
+      aiRunActionButton.disabled = state.gameComplete;
+      aiRunActionButton.textContent = state.gameComplete ? 'Game Complete' : 'Run';
+    }
+  }
+
+  async function runSelectedAiAction() {
+    const action = getSelectedAiRunAction();
+
+    try {
+      localStorage.setItem(AI_RUN_ACTION_KEY, action.id);
+    } catch (error) {
+      // Ignore storage failures (e.g. private browsing).
+    }
+
+    if (action.id === 'run-nation') {
+      await runAiTurn();
+    } else if (action.id === 'run-full-turn') {
+      await runFullAiTurn();
+    } else if (action.id === 'run-entire-game') {
+      await runEntireGame();
+    } else if (action.targetTurn) {
+      await runUntilNationTurn(action.targetTurn, action.targetNation);
+    }
+  }
+
   function updateMouseCoordsText(sourceX, sourceY) {
     if (!mouseCoords) {
       return;
@@ -6657,16 +6768,20 @@
     nextPhaseButton.addEventListener('click', advanceTurnPhase);
   }
 
-  if (runAiTurnButton) {
-    runAiTurnButton.addEventListener('click', runAiTurn);
+  populateAiRunActionSelect();
+
+  if (aiRunActionSelect) {
+    aiRunActionSelect.addEventListener('change', () => {
+      try {
+        localStorage.setItem(AI_RUN_ACTION_KEY, getSelectedAiRunAction().id);
+      } catch (error) {
+        // Ignore storage failures (e.g. private browsing).
+      }
+    });
   }
 
-  if (runFullAiTurnButton) {
-    runFullAiTurnButton.addEventListener('click', runFullAiTurn);
-  }
-
-  if (runEntireGameButton) {
-    runEntireGameButton.addEventListener('click', runEntireGame);
+  if (aiRunActionButton) {
+    aiRunActionButton.addEventListener('click', runSelectedAiAction);
   }
 
   syncMapSize();
