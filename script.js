@@ -12,6 +12,7 @@
   const MIN_ZOOM = 0.5;
   const MAX_ZOOM = 2;
   const MAP_IMAGE_PATH = 'Game Map.png';
+  const GAME_LOG_LIMIT = 20000;
 
   const mapViewport = document.getElementById('map-viewport');
   const mapCanvas = document.getElementById('map-canvas');
@@ -384,6 +385,7 @@
     activatedUnitIds: [],
     vpByNation: {},
     vpLog: [],
+    gameLog: [],
     vpScoredKeys: [],
     vpRegionAwardedTurns: [],
     vpNationTurnBaseline: {},
@@ -850,6 +852,7 @@
       const activatedUnitIds = normalizeUniqueStringList(parsed.activatedUnitIds);
       const vpByNation = normalizeStringNumberMap(parsed.vpByNation);
       const vpLog = normalizeVpLog(parsed.vpLog);
+      const gameLog = normalizeGameLog(parsed.gameLog);
       const vpScoredKeys = normalizeUniqueStringList(parsed.vpScoredKeys);
       const vpRegionAwardedTurns = normalizeUniqueTurnList(parsed.vpRegionAwardedTurns);
       const vpNationTurnBaseline = normalizeStringNumberMap(parsed.vpNationTurnBaseline);
@@ -877,6 +880,7 @@
         activatedUnitIds,
         vpByNation,
         vpLog,
+        gameLog,
         vpScoredKeys,
         vpRegionAwardedTurns,
         vpNationTurnBaseline,
@@ -1250,6 +1254,26 @@
       .filter(Boolean);
   }
 
+  function normalizeGameLog(value) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .filter((entry) => entry && typeof entry === 'object')
+      .slice(-GAME_LOG_LIMIT)
+      .map((entry) => ({
+        id: String(entry.id || `${Date.now()}|${Math.random().toString(36).slice(2, 8)}`),
+        timestamp: String(entry.timestamp || new Date().toISOString()),
+        turn: sanitizeInteger(entry.turn, 0, TOTAL_TURNS, 0),
+        phase: String(entry.phase || '').trim(),
+        nation: String(entry.nation || '').trim(),
+        type: String(entry.type || '').trim(),
+        details: entry.details && typeof entry.details === 'object' ? entry.details : {}
+      }))
+      .filter((entry) => entry.type);
+  }
+
   function normalizeUniqueTurnList(value) {
     if (!Array.isArray(value)) {
       return [];
@@ -1277,6 +1301,25 @@
 
   function saveState() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
+
+  function recordGameEvent(type, details = {}, nationName = '') {
+    const activeNation = nationName || (typeof getActiveNationNames === 'function' ? getActiveNationNames()[0] : '');
+    const phase = typeof getCurrentPhase === 'function' ? getCurrentPhase().id : '';
+    state.gameLog = Array.isArray(state.gameLog) ? state.gameLog : [];
+    state.gameLog.push({
+      id: `${Date.now()}|${type}|${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: new Date().toISOString(),
+      turn: state.currentTurn,
+      phase,
+      nation: normalizeNationForVp(activeNation),
+      type,
+      details
+    });
+    if (state.gameLog.length > GAME_LOG_LIMIT) {
+      state.gameLog = state.gameLog.slice(-GAME_LOG_LIMIT);
+    }
+    saveState();
   }
 
   function normalizeScenarioMode(value) {
@@ -1802,6 +1845,13 @@
       type,
       label: String(label || '').trim()
     });
+    recordGameEvent('vp-awarded', {
+      points: parsedPoints,
+      vpNation: nation,
+      vpType: type,
+      label: String(label || '').trim(),
+      scoreKey
+    }, nation);
 
     return true;
   }
@@ -1906,6 +1956,43 @@
     });
   }
 
+  function scoreRaiderCaptureObjectives(turn, capturedSpaceId) {
+    const normalizedControlledSpaces = getControlledSpacesByNationNormalized();
+    const capturedSpace = spacesById.get(capturedSpaceId);
+    const capturedSpaceName = capturedSpace ? getSpaceBaseName(capturedSpace) : '';
+    if (!capturedSpaceName) {
+      return 0;
+    }
+
+    let awardedPoints = 0;
+    invaderNations.forEach((nationName) => {
+      const profile = getNationObjectiveProfile(nationName);
+      if (!profile || !profile.controlSpaces) {
+        return;
+      }
+
+      Object.entries(profile.controlSpaces).forEach(([objectiveSpaceName, points]) => {
+        const resolvedSpaceName = resolveObjectiveSpaceName(objectiveSpaceName);
+        if (resolvedSpaceName !== capturedSpaceName || !nationControlsObjectiveSpace(nationName, resolvedSpaceName, normalizedControlledSpaces)) {
+          return;
+        }
+
+        if (addVp(
+          nationName,
+          points,
+          'objective-capture',
+          `${nationName} captured ${resolvedSpaceName}`,
+          turn,
+          `objective|control|${normalizeNationForVp(nationName)}|${resolvedSpaceName}`
+        )) {
+          awardedPoints += points;
+        }
+      });
+    });
+
+    return awardedPoints;
+  }
+
   function scoreHomeRegionTurnObjectivesForActiveNation(turn) {
     getActiveNationNames().forEach((nationName) => {
       const normalizedNation = normalizeNationForVp(nationName);
@@ -1999,22 +2086,31 @@
     const profile = getNationObjectiveProfile(attackerNation);
     const pointsPerUnit = profile ? Number(profile.pointsPerDestroyedOrSubmittedUnit || 0) : 0;
     if (pointsPerUnit <= 0 || !Array.isArray(units)) {
-      return;
+      return 0;
     }
 
+    let awardedPoints = 0;
     units.forEach((unit) => {
       if (!unit || !unit.id || getUnitNation(unit) === attackerNation) {
         return;
       }
-      addVp(
+      if (addVp(
         attackerNation,
         pointsPerUnit,
         'objective-unit-loss',
         `${attackerNation} ${eventType} ${getUnitNation(unit)} unit`,
         turn,
         `objective|unit-loss|${normalizeNationForVp(attackerNation)}|${eventType}|${unit.id}`
-      );
+      )) {
+        awardedPoints += pointsPerUnit;
+      }
     });
+
+    return awardedPoints;
+  }
+
+  function formatCombatVpMessage(vpAwarded) {
+    return vpAwarded > 0 ? `${vpAwarded} VP awarded.` : '';
   }
 
   function scoreReplaceControlObjectivesForActiveNation(turn) {
@@ -2814,9 +2910,17 @@
 
         if (shouldSubmit) {
           applySubmission(singleDefenderNation, attackerNation);
-          scoreDestroyedOrSubmittedUnits(attackerNation, defenderUnits, state.currentTurn, 'submitted');
+          const vpAwarded = scoreDestroyedOrSubmittedUnits(attackerNation, defenderUnits, state.currentTurn, 'submitted');
+          recordGameEvent('combat-submission', {
+            spaceId,
+            spaceName: spacesById.get(spaceId)?.name || '',
+            attackerNation,
+            defenderNation: singleDefenderNation,
+            submittedUnitIds: defenderUnits.map((unit) => unit.id),
+            vpAwarded
+          }, attackerNation);
           markGarrisonRequired(spaceId, attackerNation);
-          setCombatStatus(`${singleDefenderNation} submitted to ${attackerNation}.`, 'success');
+          setCombatStatus(`${singleDefenderNation} submitted to ${attackerNation}. ${formatCombatVpMessage(vpAwarded)}`.trim(), 'success');
           return null;
         }
       }
@@ -3315,6 +3419,7 @@
     }
 
     const { spaceId, attackerNation } = pendingCombat;
+    let vpAwarded = 0;
     const space = spacesById.get(spaceId);
     if (!space) {
       return {
@@ -3375,6 +3480,9 @@
         ...(attackerLeadersOnly ? getLeaderOnlyUnitIds(attackerUnits) : []),
         ...(defenderLeadersOnly ? getLeaderOnlyUnitIds(defenderUnits) : [])
       ];
+      if (defenderLeadersOnly) {
+        vpAwarded += scoreDestroyedOrSubmittedUnits(attackerNation, defenderUnits, state.currentTurn, 'destroyed');
+      }
       const casualtiesRemoved = removedUnitIds.length;
       removeUnitsById(removedUnitIds);
 
@@ -3390,6 +3498,18 @@
       ]
         .filter(Boolean)
         .join(' ');
+      recordGameEvent('combat-round', {
+        spaceId,
+        spaceName: space.name,
+        attackerNation,
+        defenderNation,
+        attackerUnitIds: attackerUnits.map((unit) => unit.id),
+        defenderUnitIds: defenderUnits.map((unit) => unit.id),
+        attackerCasualtyUnitIds: attackerLeadersOnly ? getLeaderOnlyUnitIds(attackerUnits) : [],
+        defenderCasualtyUnitIds: defenderLeadersOnly ? getLeaderOnlyUnitIds(defenderUnits) : [],
+        reason: 'leader-only-force-removed',
+        vpAwarded
+      }, attackerNation);
 
       return {
         resolved: true,
@@ -3397,6 +3517,7 @@
         message: '',
         casualtiesRemoved,
         casualtyMessage,
+        vpAwarded,
         hiddenDiceMessage: '',
         attackerStillPresent,
         defendersStillPresent
@@ -3450,7 +3571,7 @@
       roundLosses.defenderLosses,
       `${defenderNation} (defender)`
     );
-    scoreDestroyedOrSubmittedUnits(attackerNation, defenderCasualties, state.currentTurn, 'destroyed');
+    vpAwarded += scoreDestroyedOrSubmittedUnits(attackerNation, defenderCasualties, state.currentTurn, 'destroyed');
     removeUnitsById([...attackerCasualties, ...defenderCasualties]);
     const leaderOnlyNationsRemoved = removeLeaderOnlyNationsInCombatSpace(spaceId);
     const leaderOnlyUnitsRemoved = leaderOnlyNationsRemoved.length;
@@ -3480,6 +3601,23 @@
           .filter(Boolean)
           .join(' ');
 
+    recordGameEvent('combat-round', {
+      spaceId,
+      spaceName: space.name,
+      attackerNation,
+      defenderNation,
+      attackerUnitIds: attackerUnits.map((unit) => unit.id),
+      defenderUnitIds: defenderUnits.map((unit) => unit.id),
+      attackerCasualtyUnitIds: attackerCasualties,
+      defenderCasualtyUnitIds: defenderCasualties,
+      attackerDice: attackerDice.map((die) => die.value),
+      defenderDice: defenderDice.map((die) => die.value),
+      attackerLosses: roundLosses.attackerLosses,
+      defenderLosses: roundLosses.defenderLosses,
+      leaderOnlyNationsRemoved,
+      vpAwarded
+    }, attackerNation);
+
     combatDisplayBySpaceId.set(spaceId, {
       attackerNation,
       defenderNation,
@@ -3498,6 +3636,7 @@
       casualtiesRemoved,
       hiddenDiceMessage,
       casualtyMessage: roundSummaryMessage,
+      vpAwarded,
       attackerStillPresent,
       defendersStillPresent
     };
@@ -3621,9 +3760,10 @@
       }
       if (result.attackerStillPresent && !result.defendersStillPresent) {
         markGarrisonRequired(pendingCombat.spaceId, pendingCombat.attackerNation);
+        result.vpAwarded += scoreRaiderCaptureObjectives(state.currentTurn, pendingCombat.spaceId);
       }
       removePendingCombat(pendingCombat.id);
-      setCombatStatus('Combat resolved. One side no longer has units in this space.', 'success');
+      setCombatStatus(`Combat resolved. One side no longer has units in this space. ${formatCombatVpMessage(result.vpAwarded)}`.trim(), 'success');
     } else {
       setCombatStatus('Combat round resolved. You may resolve another round or withdraw.', 'success');
     }
@@ -3635,7 +3775,7 @@
     const shouldShowRoundNotice = result.casualtiesRemoved > 0 || result.hiddenDiceMessage || showCombatToggle?.checked;
     if (shouldShowRoundNotice) {
       showCombatNotice(
-        result.casualtyMessage || 'Combat round resolved.',
+        `${result.casualtyMessage || 'Combat round resolved.'} ${formatCombatVpMessage(result.vpAwarded)}`.trim(),
         () => {
           combatDisplayBySpaceId.delete(resolvedCombatSpaceId);
           renderUnits();
@@ -3707,12 +3847,16 @@
           ...(attackerLeadersOnly ? getLeaderOnlyUnitIds(attackerUnits) : []),
           ...(defenderLeadersOnly ? getLeaderOnlyUnitIds(defenderUnits) : [])
         ];
+        if (defenderLeadersOnly) {
+          scoreDestroyedOrSubmittedUnits(attackerNation, defenderUnits, state.currentTurn, 'destroyed');
+        }
         removeUnitsById(removedUnitIds);
 
         const attackerStillPresent = getUnitsInSpace(spaceId).some((unit) => getUnitNation(unit) === attackerNation);
         const defendersStillPresent = getUnitsInSpace(spaceId).some((unit) => getUnitNation(unit) !== attackerNation);
         if (attackerStillPresent && !defendersStillPresent) {
           markGarrisonRequired(spaceId, attackerNation);
+          scoreRaiderCaptureObjectives(state.currentTurn, spaceId);
         }
 
         return { attackerRetreated: false, defenderSubmitted: false };
@@ -3733,6 +3877,7 @@
 
       const attackerCasualties = chooseCasualtyUnitIds(attackerUnits, roundLosses.attackerLosses, `${attackerNation} (attacker)`);
       const defenderCasualties = chooseCasualtyUnitIds(defenderUnits, roundLosses.defenderLosses, 'Defender');
+      scoreDestroyedOrSubmittedUnits(attackerNation, defenderCasualties, state.currentTurn, 'destroyed');
       removeUnitsById([...attackerCasualties, ...defenderCasualties]);
       removeLeaderOnlyNationsInCombatSpace(spaceId);
 
@@ -3741,6 +3886,7 @@
       if (!attackerStillPresent || !defendersStillPresent) {
         if (attackerStillPresent && !defendersStillPresent) {
           markGarrisonRequired(spaceId, attackerNation);
+          scoreRaiderCaptureObjectives(state.currentTurn, spaceId);
         }
         return { attackerRetreated: false, defenderSubmitted: false };
       }
@@ -4354,6 +4500,7 @@
     if (accompanyingLeader) {
       snapUnitToSpace(accompanyingLeader, targetSpace);
     }
+    scoreRaiderCaptureObjectives(state.currentTurn, targetSpace.id);
 
     const activatedSet = new Set(state.activatedUnitIds);
     activatedSet.add(unit.id);
@@ -4365,6 +4512,14 @@
     const enemyPresent = getUnitsInSpace(targetSpace.id).some(
       (occupant) => canNationAttackDefender(movingNation, getUnitNation(occupant))
     );
+    recordGameEvent('move', {
+      sourceSpaceId: originSpaceId,
+      sourceSpaceName: originSpaceId && spacesById.get(originSpaceId) ? spacesById.get(originSpaceId).name : '',
+      targetSpaceId: targetSpace.id,
+      targetSpaceName: targetSpace.name,
+      unitIds: [unit.id, ...(accompanyingLeader ? [accompanyingLeader.id] : [])],
+      hostileEntry: enemyPresent
+    }, movingNation);
 
     if (enemyPresent) {
       const originalConfirm = window.confirm;
@@ -4397,7 +4552,15 @@
     }
 
     applySubmission(defenderNation, pendingCombat.attackerNation);
-    scoreDestroyedOrSubmittedUnits(pendingCombat.attackerNation, defenderUnits, state.currentTurn, 'submitted');
+    const vpAwarded = scoreDestroyedOrSubmittedUnits(pendingCombat.attackerNation, defenderUnits, state.currentTurn, 'submitted');
+    recordGameEvent('combat-submission', {
+      spaceId: pendingCombat.spaceId,
+      spaceName: spacesById.get(pendingCombat.spaceId)?.name || '',
+      attackerNation: pendingCombat.attackerNation,
+      defenderNation,
+      submittedUnitIds: defenderUnits.map((unit) => unit.id),
+      vpAwarded
+    }, pendingCombat.attackerNation);
     markGarrisonRequired(pendingCombat.spaceId, pendingCombat.attackerNation);
     removePendingCombat(pendingCombat.id);
     return true;
@@ -4636,6 +4799,7 @@
       }
       if (result.attackerStillPresent && !result.defendersStillPresent) {
         markGarrisonRequired(pendingCombat.spaceId, pendingCombat.attackerNation);
+        result.vpAwarded += scoreRaiderCaptureObjectives(state.currentTurn, pendingCombat.spaceId);
       }
       removePendingCombat(pendingCombat.id);
     }
@@ -5073,6 +5237,11 @@
     const startingNationLabel = getActiveNationEntry().label;
     const startingNationNames = getActiveNationNames().map(normalizeNationForVp);
     const vpBefore = startingNationNames.reduce((sum, nation) => sum + (state.vpByNation[nation] || 0), 0);
+    recordGameEvent('nation-turn-start', {
+      nationIndex: startingNationIndex,
+      nationNames: startingNationNames,
+      vpBefore
+    }, startingNationNames[0]);
     const aiTurnSummary = createAiTurnSummary(startingTurn, startingNationLabel);
     activeAiTurnSummary = aiTurnSummary;
     let safety = 0;
@@ -5099,6 +5268,15 @@
     const vpAfter = startingNationNames.reduce((sum, nation) => sum + (state.vpByNation[nation] || 0), 0);
     aiTurnSummary.vpGained = vpAfter - vpBefore;
     activeAiTurnSummary = null;
+    recordGameEvent('nation-turn-end', {
+      nationIndex: startingNationIndex,
+      nationNames: startingNationNames,
+      vpBefore,
+      vpAfter,
+      vpGained: aiTurnSummary.vpGained,
+      moves: aiTurnSummary.attacksBySpaceId.size,
+      lossesByNation: aiTurnSummary.lossesByNation
+    }, startingNationNames[0]);
 
     showAiTurnSummary(buildAiTurnSummaryText(aiTurnSummary), 'Run AI Turn Summary');
   }
@@ -6605,16 +6783,26 @@
 
           const originSpaceByUnitId = new Map(movedUnits.map((candidate) => [candidate.id, candidate.spaceId || targetSpace.id]));
           movedUnits.forEach((candidate) => snapUnitToSpace(candidate, targetSpace));
+          scoreRaiderCaptureObjectives(state.currentTurn, targetSpace.id);
+          const enemyPresent = getCurrentPhase().id === 'action' && movingNation
+            ? getUnitsInSpace(targetSpace.id).some(
+                (occupant) => canNationAttackDefender(movingNation, getUnitNation(occupant))
+              )
+            : false;
+          recordGameEvent('move', {
+            sourceSpaceId: movingFromSpaceId,
+            sourceSpaceName: movingFromSpaceId && spacesById.get(movingFromSpaceId) ? spacesById.get(movingFromSpaceId).name : '',
+            targetSpaceId: targetSpace.id,
+            targetSpaceName: targetSpace.name,
+            unitIds: movedUnits.map((candidate) => candidate.id),
+            hostileEntry: enemyPresent
+          }, movingNation);
 
           const activatedSet = new Set(state.activatedUnitIds);
           movedUnits.forEach((candidate) => activatedSet.add(candidate.id));
           state.activatedUnitIds = Array.from(activatedSet);
 
           if (getCurrentPhase().id === 'action' && movingNation) {
-            const enemyPresent = getUnitsInSpace(targetSpace.id).some(
-              (occupant) => canNationAttackDefender(movingNation, getUnitNation(occupant))
-            );
-
             if (enemyPresent) {
               movedUnits.forEach((candidate) => {
                 ensurePendingCombat(targetSpace.id, movingNation, {
