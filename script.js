@@ -27,6 +27,8 @@
   const currentTurnLabel = document.getElementById('current-turn');
   const currentPhaseLabel = document.getElementById('current-phase');
   const phaseHelpLabel = document.getElementById('phase-help');
+  const nationObjectivesLabel = document.getElementById('nation-objectives');
+  const endPhaseVpSummaryLabel = document.getElementById('end-phase-vp-summary');
   const nextPhaseButton = document.getElementById('next-phase');
   const aiRunActionSelect = document.getElementById('ai-run-action-select');
   const aiRunActionButton = document.getElementById('ai-run-action-button');
@@ -114,6 +116,12 @@
   ]);
 
   const invaderNations = new Set(['Egypt', 'Aram-Syria', 'Assyria', 'Babylonia']);
+  const RAIDER_VP_RULES = {
+    Egypt: { pointsPerDestroyedOrSubmittedUnit: 1, controlSpaces: { Jerusalem: 1, Philistia: 1 } },
+    'Aram-Syria': { pointsPerDestroyedOrSubmittedUnit: 1, controlSpaces: { Bashan: 1, Dan: 1, Gilead: 1, Shechem: 1, Samaria: 1 } },
+    Assyria: { pointsPerDestroyedOrSubmittedUnit: 1, controlSpaces: { Samaria: 1 } },
+    Babylonia: { pointsPerDestroyedOrSubmittedUnit: 1, controlSpaces: { Jerusalem: 2 } }
+  };
   const DIVIDED_KINGDOM_SPACE_NAME_ALIASES = new Map([
     ['Shephelah', 'Shephela']
   ]);
@@ -1966,7 +1974,7 @@
 
     let awardedPoints = 0;
     invaderNations.forEach((nationName) => {
-      const profile = getNationObjectiveProfile(nationName);
+      const profile = RAIDER_VP_RULES[nationName];
       if (!profile || !profile.controlSpaces) {
         return;
       }
@@ -1991,6 +1999,44 @@
     });
 
     return awardedPoints;
+  }
+
+  function repairRaiderVpFromHistory() {
+    (state.gameLog || []).forEach((entry) => {
+      const details = entry.details || {};
+      const attackerNation = normalizeNationForVp(details.attackerNation || entry.nation);
+      if (!RAIDER_VP_RULES[attackerNation] || !Array.isArray(details.defenderCasualtyUnitIds)) {
+        return;
+      }
+
+      details.defenderCasualtyUnitIds.forEach((unitId) => {
+        addVp(
+          attackerNation,
+          RAIDER_VP_RULES[attackerNation].pointsPerDestroyedOrSubmittedUnit,
+          'objective-unit-loss',
+          `${attackerNation} destroyed historical defender unit`,
+          entry.turn,
+          `objective|unit-loss|${attackerNation}|destroyed|${unitId}`
+        );
+      });
+    });
+
+    const controlled = getControlledSpacesByNationNormalized();
+    invaderNations.forEach((nationName) => {
+      const profile = RAIDER_VP_RULES[nationName];
+      Object.entries(profile.controlSpaces).forEach(([spaceName, points]) => {
+        if (nationControlsObjectiveSpace(nationName, spaceName, controlled)) {
+          addVp(
+            nationName,
+            points,
+            'objective-capture',
+            `${nationName} controls ${spaceName}`,
+            state.currentTurn,
+            `objective|control|${nationName}|${spaceName}`
+          );
+        }
+      });
+    });
   }
 
   function scoreHomeRegionTurnObjectivesForActiveNation(turn) {
@@ -2083,9 +2129,17 @@
   }
 
   function scoreDestroyedOrSubmittedUnits(attackerNation, units, turn, eventType) {
-    const profile = getNationObjectiveProfile(attackerNation);
-    const pointsPerUnit = profile ? Number(profile.pointsPerDestroyedOrSubmittedUnit || 0) : 0;
+    const profile = RAIDER_VP_RULES[normalizeNationForVp(attackerNation)];
+    const pointsPerUnit = profile ? profile.pointsPerDestroyedOrSubmittedUnit : 0;
     if (pointsPerUnit <= 0 || !Array.isArray(units)) {
+      if (Array.isArray(units) && units.length && invaderNations.has(normalizeNationForVp(attackerNation))) {
+        recordGameEvent('vp-scoring-skipped', {
+          attackerNation,
+          eventType,
+          unitIds: units.map((unit) => unit && unit.id).filter(Boolean),
+          reason: 'missing-raider-vp-rule'
+        }, attackerNation);
+      }
       return 0;
     }
 
@@ -2415,6 +2469,9 @@
         : `${phase.helpText}${actionLockHint}`;
     }
 
+      updateNationObjectivesUi(phase.id);
+      updateEndPhaseVpSummaryUi(phase.id);
+
     const currentNation = NATION_ORDER[state.currentNationIndex] || NATION_ORDER[0];
     if (currentNationLabel) {
       currentNationLabel.textContent = currentNation.label;
@@ -2444,6 +2501,116 @@
     updateAiRunControlUi();
 
     updateVpUi();
+  }
+
+  function updateNationObjectivesUi(phaseId) {
+    if (!nationObjectivesLabel) {
+      return;
+    }
+
+    if (phaseId !== 'growth' && phaseId !== 'action') {
+      nationObjectivesLabel.hidden = true;
+      nationObjectivesLabel.replaceChildren();
+      return;
+    }
+
+    const activeNationNames = getActiveNationNames();
+    const nationName = normalizeNationForVp(activeNationNames[0] || '');
+    const aiProfile = getNationObjectiveProfile(nationName) || {};
+    const fallbackProfile = RAIDER_VP_RULES[nationName] || {};
+    const profile = {
+      ...aiProfile,
+      ...fallbackProfile,
+      controlSpaces: {
+        ...(aiProfile.controlSpaces || {}),
+        ...(fallbackProfile.controlSpaces || {})
+      }
+    };
+    const items = [];
+    const controlEntries = Object.entries(profile.controlSpaces || {});
+    if (controlEntries.length) {
+      items.push(`Control: ${controlEntries.map(([space, points]) => `${space} (+${points})`).join(', ')}`);
+    }
+    if (profile.pointsPerDestroyedOrSubmittedUnit) {
+      items.push(`Destroy or submit enemy units: +${profile.pointsPerDestroyedOrSubmittedUnit} VP each`);
+    }
+    if (profile.replaceControl) {
+      items.push(`Replace control of ${profile.replaceControl} regions this turn: +${profile.replaceControl} VP`);
+    }
+    Object.entries(profile.eliminateNations || {}).forEach(([targetNation, points]) => {
+      items.push(`Eliminate ${targetNation}: +${points} VP`);
+    });
+    if (profile.surviveToTurn) {
+      items.push(`Survive to Turn ${profile.surviveToTurn.turn}: +${profile.surviveToTurn.points} VP`);
+    }
+
+    const homeObjective = HOME_REGION_TURN_VP_OBJECTIVES.get(nationName);
+    if (homeObjective) {
+      items.push(`Have a unit in ${homeObjective.regionName} at the end of each turn: +${homeObjective.points} VP`);
+    }
+
+    const leaderObjective = profile.leaderObjectivesByTurn?.[state.currentTurn];
+    Object.entries(leaderObjective?.controlSpaces || {}).forEach(([space, points]) => {
+      items.push(`Turn ${state.currentTurn} leader objective: control ${space} (+${points})`);
+    });
+
+    nationObjectivesLabel.hidden = false;
+    nationObjectivesLabel.replaceChildren();
+    const heading = document.createElement('strong');
+    heading.textContent = `${nationName || 'Nation'} VP objectives`;
+    nationObjectivesLabel.appendChild(heading);
+    const list = document.createElement('ul');
+    items.forEach((item) => {
+      const listItem = document.createElement('li');
+      listItem.textContent = item;
+      list.appendChild(listItem);
+    });
+    if (!items.length) {
+      const empty = document.createElement('span');
+      empty.textContent = 'No VP objectives.';
+      nationObjectivesLabel.appendChild(empty);
+    } else {
+      nationObjectivesLabel.appendChild(list);
+    }
+  }
+
+  function updateEndPhaseVpSummaryUi(phaseId) {
+    if (!endPhaseVpSummaryLabel) {
+      return;
+    }
+
+    if (phaseId !== 'end') {
+      endPhaseVpSummaryLabel.hidden = true;
+      endPhaseVpSummaryLabel.textContent = '';
+      return;
+    }
+
+    const nationNames = getActiveNationNames().map(normalizeNationForVp).filter(Boolean);
+    const totalVp = nationNames.reduce((sum, nationName) => sum + (state.vpByNation[nationName] || 0), 0);
+    const turnAwards = (state.vpLog || []).filter(
+      (entry) => nationNames.includes(normalizeNationForVp(entry.nation)) && entry.turn === state.currentTurn
+    );
+    const gainedVp = turnAwards.reduce((sum, entry) => sum + Number(entry.points || 0), 0);
+    const label = nationNames.length === 1 ? nationNames[0] : nationNames.join(' / ') || 'Nation';
+    const awardsByReason = new Map();
+    turnAwards.forEach((entry) => {
+      let reason = entry.label || entry.type || 'VP objective';
+      if (entry.type === 'objective-unit-loss') {
+        reason = String(entry.label || '').toLowerCase().includes('submitted')
+          ? 'units submitted'
+          : 'units destroyed';
+      }
+
+      awardsByReason.set(reason, (awardsByReason.get(reason) || 0) + Number(entry.points || 0));
+    });
+    const awardSummary = awardsByReason.size
+      ? Array.from(awardsByReason.entries())
+          .map(([reason, points]) => `${points > 0 ? '+' : ''}${points} VP: ${reason}`)
+          .join('; ')
+      : 'No VP awarded this turn.';
+
+    endPhaseVpSummaryLabel.hidden = false;
+    endPhaseVpSummaryLabel.textContent = `${label} VP this turn: ${gainedVp >= 0 ? '+' : ''}${gainedVp} | Total VP: ${totalVp} | ${awardSummary}`;
   }
 
   function findSpaceByName(name) {
@@ -4300,6 +4467,7 @@
     const phase = getCurrentPhase();
     updateVpSeenNations();
     cleanupExpiredVassals();
+    repairRaiderVpFromHistory();
     cleanPendingCombats();
     cleanGarrisonRequirements();
 
