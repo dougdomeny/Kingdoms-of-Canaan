@@ -42,7 +42,7 @@
       surviveToTurn: { turn: 7, points: 2 }
     },
     Moab: {
-      controlSpaces: { Moab: 1, Arnon: 1 },
+      controlSpaces: { Moab: 1, Mishor: 1 },
       surviveToTurn: { turn: 7, points: 2 }
     },
     Edom: {

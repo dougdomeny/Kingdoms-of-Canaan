@@ -1900,6 +1900,10 @@
     });
   }
 
+  function isNationVassal(nationName) {
+    return Boolean(state.vassalByNation[normalizeNationForVp(nationName)]);
+  }
+
   function updateVpSeenNations() {
     const seen = new Set(state.vpSeenNations || []);
     state.units.forEach((unit) => {
@@ -1938,7 +1942,7 @@
       }
 
       const profile = getNationObjectiveProfile(nationName);
-      if (!profile || !profile.controlSpaces) {
+      if (!profile || !profile.controlSpaces || isNationVassal(nationName)) {
         return;
       }
 
@@ -1958,7 +1962,7 @@
           'objective-control',
           `${nationName} controls ${resolvedSpaceName}`,
           turn,
-          `objective|control|${normalizeNationForVp(nationName)}|${resolvedSpaceName}`
+          `objective|control|${normalizeNationForVp(nationName)}|${resolvedSpaceName}|turn:${turn}`
         );
       });
     });
@@ -2043,7 +2047,7 @@
     getActiveNationNames().forEach((nationName) => {
       const normalizedNation = normalizeNationForVp(nationName);
       const objective = HOME_REGION_TURN_VP_OBJECTIVES.get(normalizedNation);
-      if (!objective) {
+      if (!objective || isNationVassal(normalizedNation)) {
         return;
       }
 
@@ -2432,7 +2436,7 @@
       const overlordInVassalTerritory = state.units.some((unit) =>
         getUnitNation(unit) === overlordNation && controlledSpaceIds.includes(unit.spaceId)
       );
-      if (controlledSpaceIds.length >= 2 && !overlordInVassalTerritory) {
+      if (!overlordInVassalTerritory) {
         return;
       }
 
@@ -5094,6 +5098,7 @@
 
     const primaryNation = ai.normalizeNationName(activeNations[0]);
     const objectives = ai.getNationObjectives(primaryNation, state.currentTurn, detectedSpaces);
+    const homeRegionObjective = HOME_REGION_TURN_VP_OBJECTIVES.get(primaryNation);
     const recentlyCapturedSpaceIds = new Set();
     const visitedSpaceIdsByUnitId = new Map();
     const settledUnitIds = new Set();
@@ -5163,6 +5168,13 @@
             const friendlyInOrigin = getUnitsInSpace(current.spaceId)
               .filter((occupant) => getUnitNation(occupant) === unitNation).length;
             const forceStats = getActiveNationForceStats();
+            const isLastTinyHomeUnit = homeRegionObjective &&
+              forceStats.nationUnitCount <= 2 &&
+              current.spaceId === homeRegionObjective.spaceId &&
+              friendlyInOrigin <= 1;
+            if (isLastTinyHomeUnit) {
+              return;
+            }
             const tinyNationAttack = forceStats.nationUnitCount <= 2 && enemyInTarget.length > 0;
             const pendingCombatForNation = state.pendingCombats.find(
               (combat) => combat.attackerNation === unitNation
