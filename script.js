@@ -109,10 +109,10 @@
   ]);
 
   const invadingReinforcementsByTurn = new Map([
-    [6, [{ unitTypeId: 'egypt-chariot', count: 2 }]],
-    [7, [{ unitTypeId: 'aram-syria', count: 2 }]],
-    [8, [{ unitTypeId: 'assyria', count: 4 }]],
-    [9, [{ unitTypeId: 'babylonia', count: 4 }]]
+    [6, [{ unitTypeId: 'egypt-chariot', count: 3 }]],
+    [7, [{ unitTypeId: 'aram-syria', count: 3 }]],
+    [8, [{ unitTypeId: 'assyria', count: 5 }]],
+    [9, [{ unitTypeId: 'babylonia', count: 5 }]]
   ]);
 
   const invaderNations = new Set(['Egypt', 'Aram-Syria', 'Assyria', 'Babylonia']);
