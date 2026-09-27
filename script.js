@@ -405,7 +405,18 @@
       amorite: 6,
       canaan: 9,
       'egypt-chariot': 1,
-      hebrew: 21,
+      'hebrew-judah': 3,
+      'hebrew-dan': 2,
+      'hebrew-issachar': 2,
+      'hebrew-zebulun': 2,
+      'hebrew-asher': 2,
+      'hebrew-manasseh': 2,
+      'hebrew-benjamin': 2,
+      'hebrew-naphtali': 2,
+      'hebrew-reuben': 1,
+      'hebrew-gad': 1,
+      'hebrew-ephraim': 1,
+      'hebrew-simeon': 1,
       hittite: 5,
       'hittite-chariot': 1,
       moab: 2,
@@ -423,9 +434,19 @@
       { id: 'phoenicia-1', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
       { id: 'phoenicia-2', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
       { id: 'phoenicia-3', unitTypeId: 'phoenicia', label: 'PHO', x: 550, y: 155, spaceId: '' },
-      ...Array.from({ length: 21 }, (_, index) => ({
-        id: `hebrew-${index + 1}`,
-        unitTypeId: 'hebrew',
+      ...[
+        'judah', 'judah', 'judah',
+        'dan', 'dan',
+        'issachar', 'issachar',
+        'zebulun', 'zebulun',
+        'asher', 'asher',
+        'manasseh', 'manasseh',
+        'benjamin', 'benjamin',
+        'naphtali', 'naphtali',
+        'reuben', 'gad', 'ephraim', 'simeon'
+      ].map((tribe, index) => ({
+        id: `hebrew-${tribe}-${index + 1}`,
+        unitTypeId: `hebrew-${tribe}`,
         label: 'HEB',
         x: 802,
         y: 770,
@@ -963,9 +984,13 @@
     const descriptor = parts.slice(1).join(' ');
     const descriptorLower = descriptor.toLowerCase();
     const isChariot = descriptorLower.endsWith('chariot');
+    const isHebrewTribe = nation === 'Hebrew' && [
+      'Asher', 'Benjamin', 'Dan', 'Ephraim', 'Gad', 'Issachar',
+      'Judah', 'Manasseh', 'Naphtali', 'Reuben', 'Simeon', 'Zebulun'
+    ].includes(descriptor);
     const classification = isChariot
       ? 'chariot'
-      : descriptor
+      : descriptor && !isHebrewTribe
         ? 'leader'
         : 'standard';
 
